@@ -1,4 +1,7 @@
+from types import SimpleNamespace
+
 from src.config import RuntimeConfig
+from src.strategy.engine import StrategyEngine
 
 
 class _FakeDB:
@@ -57,3 +60,15 @@ def test_unknown_asset_uses_global():
     runtime.update({"min_edge": 0.11})
     assert runtime.params_for("SOL").min_edge == 0.11
     assert not runtime.has_override("SOL")
+
+
+def test_tick_interval_honours_fastest_asset_override():
+    db = _FakeDB()
+    runtime = RuntimeConfig(db)
+    runtime.update({"engine_tick_s": 1.0}, asset="BTC")
+    runtime.update({"engine_tick_s": 0.2}, asset="ETH")
+    engine = SimpleNamespace(
+        settings=SimpleNamespace(assets_list=["BTC", "ETH"]),
+        runtime=runtime,
+    )
+    assert StrategyEngine._tick_interval(engine) == 0.2

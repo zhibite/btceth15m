@@ -121,6 +121,13 @@ def test_config_api_per_asset_override(tmp_path):
     assert not runtime.has_override("BTC")
 
 
+def test_status_exposes_configured_assets(tmp_path):
+    client, _, _ = _client(tmp_path)
+    body = client.get("/api/status").json()
+    assert body["configured_assets"] == ["BTC", "ETH"]
+    assert body["assets"] == {}
+
+
 def test_config_api_rejects_bad_value(tmp_path):
     client, _, _ = _client(tmp_path)
     r = client.put(
