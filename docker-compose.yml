@@ -1,0 +1,12 @@
+services:
+  poly5m:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 8036
+    ports:
+      - "8036:8036"
+    volumes:
+      - ./data:/app/data

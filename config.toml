@@ -1,0 +1,48 @@
+###############################################################################
+# Polymarket 5m BTC/ETH TWAP paper bot
+###############################################################################
+
+[GENERAL]
+ASSETS = "BTC,ETH"
+WINDOW_SEC = 300
+TWAP_WINDOW_S = 60
+
+[FEED]
+RTDS_URL = "wss://ws-live-data.polymarket.com"
+CLOB_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+GAMMA_API = "https://gamma-api.polymarket.com"
+CLOB_API = "https://clob.polymarket.com"
+PRICE_BUFFER_S = 900
+RECONNECT_BASE_S = 1.0
+RECONNECT_MAX_S = 30.0
+
+[WEB]
+# 127.0.0.1 is safe by default. To expose the dashboard set HOST="0.0.0.0"
+# and a non-empty PASSWORD (HTTP Basic auth).
+HOST = "127.0.0.1"
+PORT = 8036
+USERNAME = "admin"
+PASSWORD = ""
+
+[EXECUTION]
+PAPER_TRADING = true
+LIVE_ENABLED = false
+
+[STRATEGY]
+# Entry requires: fair - executable_ask - fee >= MIN_EDGE + MODEL_BUFFER
+MIN_EDGE = 0.05
+MODEL_BUFFER = 0.02
+MAX_POSITION_USD = 5.0
+DAILY_LOSS_LIMIT_USD = 20.0
+ENTRY_MIN_REL_S = 60
+ENTRY_MAX_REL_S = 285
+MAX_SPREAD = 0.03
+MAX_STALE_BOOK_S = 3.0
+MIN_ASK_SHARES = 5.0
+MIN_ORDER_SHARES = 5.0
+TAKER_FEE_RATE = 0.07
+SIGMA_LOOKBACK_S = 600
+MIN_SIGMA_SAMPLES = 120
+ENGINE_TICK_S = 0.5
+HOLD_TO_SETTLEMENT = true
+SIGNAL_LOG_MIN_EDGE = 0.02
