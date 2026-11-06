@@ -318,7 +318,6 @@ async def api_get_config(_: None = Depends(require_login)) -> dict:
     return {
         "params": state.runtime.params.model_dump(),
         "mode": state.router.mode,
-        "db_path": str(state.settings.db_path),
     }
 
 

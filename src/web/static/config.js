@@ -83,7 +83,7 @@ function fieldHtml(field) {
   const value = DATA.params[field.key];
   const unit = field.unit ? `<span class="config-unit">${esc(field.unit)}</span>` : "";
   return `<div class="field" data-field="${esc(field.key)}">
-    <label>${esc(field.label)} <span class="scope immediate">立即生效</span></label>
+    <label>${esc(field.label)}</label>
     <div style="display:flex;align-items:center;gap:6px">
       <input type="number" step="${esc(field.step || "any")}" data-key="${esc(field.key)}" value="${esc(value)}">
       ${unit}
@@ -95,8 +95,6 @@ function fieldHtml(field) {
 
 function render() {
   $("mode").textContent = DATA.mode === "paper" ? "纸盘" : "实盘";
-  $("db-path").textContent = DATA.db_path || "--";
-  $("db-path-note").textContent = DATA.db_path || "/app/data/poly5m.db";
   INITIAL = Object.assign({}, DATA.params);
   $("groups").innerHTML = GROUPS.map((group) => `<div class="config-group">
     <h2><span class="dot"></span>${esc(group.title)}<span class="count">${group.fields.length} 项</span></h2>
@@ -148,7 +146,7 @@ async function saveConfig() {
     const res = await sendJSON("/api/config", "PUT", patch);
     DATA.params = res.params;
     render();
-    $("save-msg").textContent = "已保存，下一 tick 生效";
+    $("save-msg").textContent = "已保存";
     setTimeout(updateSaveState, 4000);
   } catch (e) {
     if (String(e.message) !== "auth") {
