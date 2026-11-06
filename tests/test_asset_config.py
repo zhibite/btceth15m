@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from src.config import RuntimeConfig
+from src.config import RuntimeConfig, get_asset_strategy_defaults
 from src.strategy.engine import StrategyEngine
 
 
@@ -60,6 +60,47 @@ def test_unknown_asset_uses_global():
     runtime.update({"min_edge": 0.11})
     assert runtime.params_for("SOL").min_edge == 0.11
     assert not runtime.has_override("SOL")
+
+
+def test_shipped_btc_defaults_are_loaded_from_toml():
+    """config.toml table names are upper-case; the loader must still find them."""
+    btc = get_asset_strategy_defaults().get("BTC", {})
+    assert btc["entry_min_rel_s"] == 180
+    assert btc["entry_max_rel_s"] == 270
+    assert btc["model_buffer"] == 0.05
+    assert btc["min_fair"] == 0.65
+    assert btc["min_entry_price"] == 0.55
+    assert "ETH" not in get_asset_strategy_defaults()
+
+
+def test_asset_defaults_merge_over_global_and_reset():
+    db = _FakeDB()
+    runtime = RuntimeConfig(
+        db,
+        asset_defaults={"BTC": {"min_fair": 0.65, "entry_min_rel_s": 180}},
+    )
+    btc = runtime.params_for("BTC")
+    assert btc.min_fair == 0.65
+    assert btc.entry_min_rel_s == 180
+    # Fields not listed inherit the current global value.
+    assert btc.model_buffer == runtime.params.model_buffer
+    assert runtime.source_for("BTC") == "asset_default"
+    assert runtime.source_for("ETH") == "global"
+    assert not runtime.has_override("BTC")
+
+    # Global edits still flow into the unspecified BTC fields.
+    runtime.update({"model_buffer": 0.04})
+    assert runtime.params_for("BTC").model_buffer == 0.04
+
+    # Saving a dashboard override takes precedence over the config defaults.
+    runtime.update({"min_fair": 0.70}, asset="BTC")
+    assert runtime.source_for("BTC") == "override"
+    assert runtime.params_for("BTC").min_fair == 0.70
+
+    # Reset removes the override and returns to the BTC config default.
+    runtime.reset("BTC")
+    assert runtime.source_for("BTC") == "asset_default"
+    assert runtime.params_for("BTC").min_fair == 0.65
 
 
 def test_tick_interval_honours_fastest_asset_override():

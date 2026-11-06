@@ -7,10 +7,18 @@ const PAGERS = {
   fills: { limit: 20, offset: 0, total: 0 },
   signals: { limit: 20, offset: 0, total: 0 },
 };
-let ASSET = ""; // "" = 全部币种
+const initialAsset = new URLSearchParams(location.search).get("asset") || "";
+let ASSET = initialAsset.trim().toUpperCase(); // "" = 全部币种
 
 function assetQuery() {
   return ASSET ? "&asset=" + encodeURIComponent(ASSET) : "";
+}
+
+function syncAssetUrl() {
+  const url = new URL(location.href);
+  if (ASSET) url.searchParams.set("asset", ASSET);
+  else url.searchParams.delete("asset");
+  history.replaceState(null, "", url);
 }
 
 function ensureAssetOptions(status) {
@@ -284,6 +292,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("asset-filter").addEventListener("change", async (e) => {
     ASSET = e.target.value;
     $("asset-meta").textContent = ASSET || "全部币种";
+    syncAssetUrl();
     Object.keys(PAGERS).forEach((key) => {
       PAGERS[key].offset = 0;
     });

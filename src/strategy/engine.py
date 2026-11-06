@@ -257,7 +257,8 @@ class StrategyEngine:
             fair_up = float(fv["fair"])
             fair_by_asset[asset] = fair_up
             candidates = self._candidates(market, fair_up, now, params)
-            best = max(candidates, key=lambda c: c["edge"]) if candidates else None
+            eligible = [c for c in candidates if c.get("eligible", True)]
+            best = max(eligible, key=lambda c: c["edge"]) if eligible else None
             position = self._position_info(asset, market.start_ts)
 
             payload = self._base_payload(
@@ -278,7 +279,10 @@ class StrategyEngine:
             if status != "candidate" or best is None:
                 payload["status"] = status
                 self._publish(asset, payload)
-                self._maybe_log_near_miss(asset, market, best, params, status)
+                # When both sides are gated, still log the best one so the
+                # near-miss table shows what min_fair/min_entry_price filtered.
+                watch = best or max(candidates, key=lambda c: c["edge"], default=None)
+                self._maybe_log_near_miss(asset, market, watch, params, status)
                 continue
 
             # ── execute the winning candidate ────────────────────────────
@@ -409,6 +413,11 @@ class StrategyEngine:
         if rel > params.entry_max_rel_s:
             return f"late({rel:.0f}s)"
         if best is None:
+            gated = sorted(
+                {str(c["gate"]) for c in payload.get("candidates") or [] if c.get("gate")}
+            )
+            if gated:
+                return "filtered(" + ",".join(gated) + ")"
             return "no_book"
         spread = best.get("spread")
         if spread is None:
@@ -424,6 +433,15 @@ class StrategyEngine:
         if float(best["edge"]) < threshold:
             return f"edge {best['edge']:.3f} < {threshold:.3f}"
         return "candidate"
+
+    @staticmethod
+    def _gate_reason(params, fair: float, effective_price: float) -> Optional[str]:
+        """Side-level filters that run before the edge threshold."""
+        if fair < params.min_fair:
+            return "fair"
+        if effective_price < params.min_entry_price:
+            return "price"
+        return None
 
     def _candidates(
         self, market: WindowMarket, fair_up: float, now: float, params
@@ -443,6 +461,8 @@ class StrategyEngine:
             )
             if preview is None:
                 continue
+            fair = float(fair)
+            gate = self._gate_reason(params, fair, preview.effective_price)
             out.append(
                 {
                     "side": side,
@@ -459,6 +479,8 @@ class StrategyEngine:
                     "edge": fair - preview.effective_price,
                     "best_size": preview.best_size,
                     "age_s": (now - book.updated_ts) if book.updated_ts else None,
+                    "gate": gate,
+                    "eligible": gate is None,
                 }
             )
         return out

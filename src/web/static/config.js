@@ -7,7 +7,9 @@ const GROUPS = [
     title: "入场与 Edge",
     fields: [
       { key: "min_edge", label: "最小 Edge", help: "公允概率 − 成交均价 − 手续费 的最低值；低于该值不入场。", step: 0.01 },
-      { key: "model_buffer", label: "模型缓冲", help: "额外安全边际，抵消模型在 0.9 以上区间的过度自信。", step: 0.01 },
+      { key: "model_buffer", label: "模型缓冲", help: "额外安全边际，抵消模型的过度自信；入场阈值 = 最小 Edge + 模型缓冲。", step: 0.01 },
+      { key: "min_fair", label: "最小 Fair（方向）", help: "只考虑模型概率不低于该值的方向；过滤 fair≈0.5 的彩票票。0 = 关闭。", step: 0.01 },
+      { key: "min_entry_price", label: "最小有效入场价", help: "含手续费的平均成交价低于该值时不入场；便宜票意味着市场不认同模型，模型偏自信时尤其危险。0 = 关闭。", step: 0.01 },
       { key: "max_position_usd", label: "单笔名义金额", help: "每个窗口最多投入的 USDC。", step: 0.5, unit: "USDC" },
       { key: "entry_min_rel_s", label: "最早入场（秒）", help: "窗口开始后多少秒才允许入场。", step: 1, unit: "秒" },
       { key: "entry_max_rel_s", label: "最晚入场（秒）", help: "窗口结束前多少秒停止入场。", step: 1, unit: "秒" },
@@ -16,7 +18,7 @@ const GROUPS = [
   {
     title: "风控",
     fields: [
-      { key: "daily_loss_limit_usd", label: "日损失上限", help: "当日已实现亏损达到该值后停止新入场。", step: 1, unit: "USDC" },
+      { key: "daily_loss_limit_usd", label: "日损失上限", help: "该币种当日已实现亏损达到该值后停止新入场；全局默认值同时作为所有币种合计的止损上限。", step: 1, unit: "USDC" },
     ],
   },
   {
@@ -123,17 +125,33 @@ function renderAssetSelect(assets) {
   select.value = ASSET;
 }
 
+function configSource() {
+  if (!ASSET) return "global";
+  if (DATA.source) return DATA.source;
+  return DATA.overridden ? "override" : "global";
+}
+
 function render() {
   $("mode").textContent = DATA.mode === "paper" ? "纸盘" : "实盘";
+  const source = configSource();
   const state = $("override-state");
   if (state) {
-    state.textContent = ASSET
-      ? (DATA.overridden ? "已单独设置" : "继承全局")
-      : "全局默认";
+    state.textContent = !ASSET
+      ? "全局默认"
+      : source === "override"
+        ? "已单独设置"
+        : source === "asset_default"
+          ? "币种默认"
+          : "继承全局";
   }
   const resetBtn = $("reset-btn");
   if (resetBtn) {
-    resetBtn.textContent = ASSET ? "取消币种覆盖" : "恢复默认";
+    resetBtn.textContent = !ASSET
+      ? "恢复默认"
+      : source === "override"
+        ? "取消币种覆盖"
+        : "恢复币种默认";
+    resetBtn.disabled = Boolean(ASSET) && source !== "override";
   }
   INITIAL = Object.assign({}, DATA.params);
   $("groups").innerHTML = GROUPS.map((group) => `<div class="config-group">

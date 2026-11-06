@@ -31,9 +31,21 @@ def _toml() -> dict:
         return tomllib.load(f)
 
 
+def _table(name: str) -> dict[str, Any]:
+    """Case-insensitive top-level TOML table lookup.
+
+    config.toml has always used upper-case table names (``[STRATEGY]``), so a
+    plain ``_toml().get(name.lower())`` lookup silently ignored the whole file.
+    Accept either casing.
+    """
+    for key, value in _toml().items():
+        if str(key).lower() == name.lower() and isinstance(value, dict):
+            return value
+    return {}
+
+
 def _section(name: str) -> dict[str, Any]:
-    raw = _toml().get(name.lower(), {}) or {}
-    return {str(k).upper(): v for k, v in raw.items()}
+    return {str(k).upper(): v for k, v in _table(name).items()}
 
 
 @lru_cache(maxsize=1)
@@ -109,6 +121,15 @@ class StrategyParams(BaseModel):
     # Entry: fair - executable_ask - fee >= min_edge + model_buffer
     min_edge: float = Field(0.05, ge=0.0, le=1.0)
     model_buffer: float = Field(0.02, ge=0.0, le=1.0)
+    # Side-level gates, applied before the edge threshold:
+    #   * min_fair          — skip a side whose model probability is too low
+    #                         (filters lottery tickets around fair≈0.5).
+    #   * min_entry_price   — skip a side whose all-in entry price is too cheap;
+    #                         a cheap entry means the market disagrees with the
+    #                         model, which is dangerous when the model is
+    #                         overconfident.
+    min_fair: float = Field(0.0, ge=0.0, le=1.0)
+    min_entry_price: float = Field(0.0, ge=0.0, le=1.0)
     max_position_usd: float = Field(5.0, gt=0.0, le=100000.0)
     daily_loss_limit_usd: float = Field(20.0, gt=0.0)
     entry_min_rel_s: int = Field(60, ge=0, le=299)
@@ -177,7 +198,12 @@ def get_settings() -> AppSettings:
 
 @lru_cache(maxsize=1)
 def get_strategy_defaults() -> StrategyParams:
-    raw = {str(k).lower(): v for k, v in _section("STRATEGY").items()}
+    # Skip nested [STRATEGY.<ASSET>] tables; they are parsed separately.
+    raw = {
+        str(k).lower(): v
+        for k, v in _section("STRATEGY").items()
+        if not isinstance(v, dict)
+    }
     env = _env()
     for field in StrategyParams.model_fields:
         env_name = field.upper()
@@ -186,20 +212,66 @@ def get_strategy_defaults() -> StrategyParams:
     return StrategyParams(**raw)
 
 
+@lru_cache(maxsize=1)
+def get_asset_strategy_defaults() -> dict[str, dict[str, Any]]:
+    """Per-asset defaults from ``[STRATEGY.<ASSET>]`` tables in config.toml.
+
+    The values are partial: fields that are not listed keep inheriting the
+    current global default (including edits made from the dashboard). This is
+    different from an ``asset_params`` override, which is a full snapshot
+    persisted in SQLite and independently editable from the config page.
+    """
+    raw = _table("STRATEGY")
+    known = set(StrategyParams.model_fields)
+    base = get_strategy_defaults().model_dump()
+    out: dict[str, dict[str, Any]] = {}
+    for asset, section in raw.items():
+        if not isinstance(section, dict):
+            continue
+        values = {
+            str(key).lower(): value
+            for key, value in section.items()
+            if str(key).lower() in known
+        }
+        if not values:
+            continue
+        # Fail fast at import/startup on an invalid per-asset default.
+        StrategyParams.model_validate({**base, **values})
+        out[str(asset).upper()] = values
+    return out
+
+
 class RuntimeConfig:
     """Strategy params persisted in SQLite so dashboard edits survive restarts.
 
-    Two layers:
-      * ``params`` — global defaults, used when an asset has no override.
-      * ``asset_params`` — per-asset overrides keyed by upper-case asset.
+    Layers, from lowest to highest precedence:
+      * ``params`` — global defaults (config.toml / env / DB edit).
+      * ``asset_defaults`` — partial ``[STRATEGY.<ASSET>]`` defaults from
+        config.toml, merged over the *current* global params.
+      * ``asset_params`` — per-asset overrides persisted in SQLite (a full
+        snapshot saved from the config page).
     """
 
     KEY = "strategy_params"
     ASSET_KEY = "asset_strategy_params"
 
-    def __init__(self, db: Any, defaults: StrategyParams | None = None) -> None:
+    def __init__(
+        self,
+        db: Any,
+        defaults: StrategyParams | None = None,
+        asset_defaults: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self._db = db
         self._defaults = defaults or get_strategy_defaults()
+        self.asset_defaults = {
+            str(asset).upper(): dict(values)
+            for asset, values in (
+                asset_defaults
+                if asset_defaults is not None
+                else get_asset_strategy_defaults()
+            ).items()
+        }
+        self._effective: dict[str, tuple[StrategyParams, StrategyParams]] = {}
         self.params = self._load(self.KEY, self._defaults)
         self.asset_params: dict[str, StrategyParams] = {}
         raw = db.get_setting(self.ASSET_KEY) if db is not None else None
@@ -225,10 +297,42 @@ class RuntimeConfig:
     def params_for(self, asset: str | None) -> StrategyParams:
         if not asset:
             return self.params
-        return self.asset_params.get(str(asset).upper(), self.params)
+        key = str(asset).upper()
+        override = self.asset_params.get(key)
+        if override is not None:
+            return override
+        extra = self.asset_defaults.get(key)
+        if not extra:
+            return self.params
+        # ``params`` is replaced (not mutated) on update/reset, so identity is
+        # a safe cache key for the merged result.
+        cached = self._effective.get(key)
+        if cached is not None and cached[0] is self.params:
+            return cached[1]
+        merged = self.params.model_dump()
+        merged.update(extra)
+        params = StrategyParams.model_validate(merged)
+        self._effective[key] = (self.params, params)
+        return params
 
     def has_override(self, asset: str | None) -> bool:
         return bool(asset) and str(asset).upper() in self.asset_params
+
+    def source_for(self, asset: str | None) -> str:
+        """Where the effective params for ``asset`` come from.
+
+        ``override``      — saved per-asset override in SQLite
+        ``asset_default`` — partial [STRATEGY.<ASSET>] defaults in config.toml
+        ``global``        — inherits the global defaults
+        """
+        key = str(asset).upper() if asset else ""
+        if not key:
+            return "global"
+        if key in self.asset_params:
+            return "override"
+        if key in self.asset_defaults:
+            return "asset_default"
+        return "global"
 
     def _save_assets(self) -> None:
         if self._db is None:

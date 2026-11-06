@@ -33,6 +33,11 @@ LIVE_ENABLED = false
 # Entry requires: fair - executable_ask - fee >= MIN_EDGE + MODEL_BUFFER
 MIN_EDGE = 0.05
 MODEL_BUFFER = 0.02
+# Optional side-level gates (0 = off). MIN_FAIR drops sides whose model
+# probability is too low; MIN_ENTRY_PRICE drops sides whose all-in entry price
+# is too cheap (the market disagrees with an overconfident model).
+MIN_FAIR = 0.0
+MIN_ENTRY_PRICE = 0.0
 MAX_POSITION_USD = 5.0
 DAILY_LOSS_LIMIT_USD = 20.0
 ENTRY_MIN_REL_S = 60
@@ -53,3 +58,21 @@ MAKER_SHADOW_ENABLED = true
 MAKER_BUFFER = 0.01
 MAKER_FALLBACK_REL_S = 250
 MAKER_CHASE_BID = true
+
+# ── Per-asset defaults ──────────────────────────────────────────────────
+# Partial overrides merged over [STRATEGY]. Fields not listed inherit the
+# current global value; the dashboard can still save a per-asset override on
+# top of these (stored in SQLite).
+[STRATEGY.BTC]
+# Paper results (Berlin 29 + Dublin 14 settled positions, 2026-11-06):
+# all live entries were at rel 60-120s, while the backtest's edge lives at
+# 180-270s; fair≈0.5 tickets lost most; BTC's model was overconfident
+# (22 trades, 45% wins vs 0.71 average fair).
+ENTRY_MIN_REL_S = 180
+ENTRY_MAX_REL_S = 270
+# General recommendation is 0.04; BTC gets one extra notch.
+MODEL_BUFFER = 0.05
+# Skip lottery tickets: fair 0.55-0.65 won only 46%, and entries below 0.50
+# won 10%. Both are independently tunable from the config page.
+MIN_FAIR = 0.65
+MIN_ENTRY_PRICE = 0.55

@@ -29,7 +29,10 @@ class _FakeDB:
 
 def _client(tmp_path):
     db = Database(tmp_path / "web.db")
-    runtime = RuntimeConfig(_FakeDB())
+    runtime = RuntimeConfig(
+        _FakeDB(),
+        asset_defaults={"BTC": {"min_fair": 0.65, "entry_min_rel_s": 180}},
+    )
     state = SimpleNamespace(
         settings=SimpleNamespace(assets_list=["BTC", "ETH"]),
         runtime=runtime,
@@ -90,7 +93,11 @@ def test_config_api_per_asset_override(tmp_path):
     btc_before = client.get("/api/config", params={"asset": "btc"}).json()
     assert btc_before["asset"] == "BTC"
     assert btc_before["overridden"] is False
+    assert btc_before["source"] == "asset_default"
     assert btc_before["params"]["min_edge"] == global_edge
+    assert btc_before["params"]["min_fair"] == 0.65
+    assert btc_before["params"]["entry_min_rel_s"] == 180
+    assert btc_before["asset_defaults"]["BTC"]["min_fair"] == 0.65
 
     saved = client.put(
         "/api/config",
@@ -102,12 +109,16 @@ def test_config_api_per_asset_override(tmp_path):
     assert saved.status_code == 200
     body = saved.json()
     assert body["overridden"] is True
+    assert body["source"] == "override"
     assert body["params"]["min_edge"] == 0.11
     assert body["params"]["max_position_usd"] == 3.0
+    # The saved snapshot keeps the BTC config default for untouched fields.
+    assert body["params"]["min_fair"] == 0.65
 
     # ETH keeps inheriting the global values.
     eth = client.get("/api/config", params={"asset": "ETH"}).json()
     assert eth["overridden"] is False
+    assert eth["source"] == "global"
     assert eth["params"]["min_edge"] == global_edge
 
     # A later global change only affects assets without an override.
@@ -117,7 +128,9 @@ def test_config_api_per_asset_override(tmp_path):
 
     reset = client.post("/api/config/reset", json={"asset": "BTC"}).json()
     assert reset["overridden"] is False
+    assert reset["source"] == "asset_default"
     assert reset["params"]["min_edge"] == 0.07
+    assert reset["params"]["min_fair"] == 0.65
     assert not runtime.has_override("BTC")
 
 

@@ -437,8 +437,12 @@ async def api_get_config(
     return {
         "params": params.model_dump(),
         "global_params": state.runtime.params.model_dump(),
+        "asset_defaults": {
+            asset: dict(values) for asset, values in state.runtime.asset_defaults.items()
+        },
         "assets": state.settings.assets_list,
         "asset": key or "",
+        "source": state.runtime.source_for(key),
         "overridden": bool(key and state.runtime.has_override(key)),
         "mode": state.router.mode,
     }
@@ -463,6 +467,7 @@ async def api_put_config(
         "ok": True,
         "params": params.model_dump(),
         "asset": key or "",
+        "source": state.runtime.source_for(key),
         "overridden": bool(key and state.runtime.has_override(key)),
     }
 
@@ -479,6 +484,7 @@ async def api_reset_config(
         "ok": True,
         "params": params.model_dump(),
         "asset": key or "",
+        "source": state.runtime.source_for(key),
         "overridden": bool(key and state.runtime.has_override(key)),
     }
 

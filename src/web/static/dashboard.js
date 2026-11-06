@@ -82,6 +82,11 @@ function statusLabel(raw) {
   if (s.startsWith("early")) return "未到入场时间 " + s.slice(5);
   if (s.startsWith("late")) return "已过入场时间 " + s.slice(4);
   if (s.startsWith("edge")) return "Edge 不足 " + s.slice(5);
+  if (s.startsWith("filtered")) {
+    const gates = s.slice(9).replace(/[()]/g, "").split(",").filter(Boolean);
+    const names = { fair: "Fair 过低", price: "入场价过低" };
+    return "已过滤 " + gates.map((g) => names[g] || g).join(" · ");
+  }
   if (s === "killswitch") return "已停止";
   if (s === "daily_loss_limit") return "触发日损失限制";
   if (s === "fill_rejected") return "成交被拒";
@@ -98,7 +103,7 @@ function statusClass(raw) {
     s.startsWith("warming") || s === "waiting_p0" || s === "stale_feed" ||
     s === "no_book" || s === "one_sided_book" || s === "stale_book" ||
     s.startsWith("thin_best") || s.startsWith("wide_spread") ||
-    s.startsWith("early") || s.startsWith("late")
+    s.startsWith("early") || s.startsWith("late") || s.startsWith("filtered")
   ) return "pending";
   return "past_t1";
 }
@@ -185,10 +190,13 @@ function renderSummary(status) {
 /* ── Asset cards ──────────────────────────────────────────────────────── */
 function tokenItem(cls, label, fair, cand) {
   const edge = cand ? Number(cand.edge) : null;
+  const gate = cand && cand.gate
+    ? ` <span class="pill idle">${cand.gate === "fair" ? "fair低" : "价低"}</span>`
+    : "";
   return `<div class="token-item ${cls}">
     <div class="token-label">${label} · 公允概率</div>
     <div class="token-price">${fmt(fair, 3)}</div>
-    <div class="muted mono">可买 ${fmt(cand && cand.avg_price, 3)} · Edge <span class="${edge > 0 ? "green" : "red"}">${fmt(edge, 3)}</span></div>
+    <div class="muted mono">可买 ${fmt(cand && cand.avg_price, 3)} · Edge <span class="${edge > 0 ? "green" : "red"}">${fmt(edge, 3)}</span>${gate}</div>
   </div>`;
 }
 
@@ -222,6 +230,8 @@ function assetCard(asset, data) {
   const threshold = data.params
     ? Number(data.params.min_edge) + Number(data.params.model_buffer)
     : null;
+  const minFair = data.params ? Number(data.params.min_fair || 0) : 0;
+  const minEntryPrice = data.params ? Number(data.params.min_entry_price || 0) : 0;
   const timeLeft = data.time_left !== undefined && data.time_left !== null
     ? data.time_left
     : Number(w.end_ts) - Date.now() / 1000;
@@ -230,8 +240,13 @@ function assetCard(asset, data) {
   const rows = cands.length
     ? cands.map((c) => {
         const edge = Number(c.edge);
+        const gateTag = c.gate
+          ? ` <span class="pill idle" title="被 min_fair / min_entry_price 过滤">${
+              c.gate === "fair" ? "fair低" : "价低"
+            }</span>`
+          : "";
         return `<tr class="${c.side === bestSide ? "candidate-best" : ""}">
-          <td><span class="pill ${c.side === "UP" ? "buy" : "sell"}">${esc(c.side)}</span></td>
+          <td><span class="pill ${c.side === "UP" ? "buy" : "sell"}">${esc(c.side)}</span>${gateTag}</td>
           <td class="mono">${fmt(c.fair, 3)}</td>
           <td class="mono">${fmt(c.best_bid, 3)}</td>
           <td class="mono">${fmt(c.best_ask, 3)}</td>
@@ -283,6 +298,8 @@ function assetCard(asset, data) {
       <span>60s TWAP <b>${fmt(data.twap60, 2)}</b></span>
       <span>σ/秒 <b>${fmt(data.sigma_bps, 2)}</b> bps</span>
       <span>剩余 <b>${timeStr(timeLeft)}</b></span>
+      ${minFair > 0 ? `<span>最小 Fair <b class="mono">${fmt(minFair, 2)}</b></span>` : ""}
+      ${minEntryPrice > 0 ? `<span>最小入场价 <b class="mono">${fmt(minEntryPrice, 2)}</b></span>` : ""}
     </div>
     <div class="sub-section">
       <h2>盘口与候选</h2>
