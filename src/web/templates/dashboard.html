@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>控制台 - BTCETH5M</title>
+<link rel="stylesheet" href="/static/style.css?v=__ASSET_VERSION__">
+</head>
+<body>
+<nav>
+  <span class="brand">BTCETH5M</span>
+  <a href="/" class="active">控制台</a>
+  <a href="/trades">交易记录</a>
+  <a href="/config">策略配置</a>
+  <div class="nav-right">
+    <span id="auth-area" class="nav-auth"></span>
+    <span class="live-dot offline" id="live-dot"></span>
+    <span id="live-label">连接中</span>
+    <span id="clock" class="mono"></span>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="control-bar" id="control-bar">
+    <div class="control-status">
+      <span class="control-dot running" id="control-dot"></span>
+      <span class="control-label" id="control-label">策略运行中</span>
+      <span class="control-meta" id="control-meta">纸盘 · 自动扫描 BTC/ETH 5m 窗口</span>
+    </div>
+    <div class="control-actions">
+      <button class="btn btn-danger" id="stop-btn" type="button">紧急停止</button>
+      <button class="btn btn-primary" id="start-btn" type="button" hidden>恢复运行</button>
+    </div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">今日盈亏 (UTC)</div>
+      <div class="stat-value" id="today-pnl">--</div>
+      <div class="stat-sub" id="today-sub">-- 笔已结算</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">累计盈亏</div>
+      <div class="stat-value" id="total-pnl">--</div>
+      <div class="stat-sub" id="total-sub">-- 笔已结算</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">胜率</div>
+      <div class="stat-value purple" id="win-rate">--</div>
+      <div class="stat-sub" id="win-sub">-- 胜 / -- 负</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">当前窗口剩余</div>
+      <div class="stat-value orange" id="window-remain">--</div>
+      <div class="stat-sub">BTC / ETH 5m 窗口</div>
+    </div>
+  </div>
+
+  <div class="asset-grid" id="asset-grid"></div>
+
+  <div class="section">
+    <h2>当前持仓 <span class="pill" id="position-count">0</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>币种</th><th>窗口开始 (UTC)</th><th>方向</th><th>份额</th><th>均价</th><th>成本</th><th>手续费</th><th>状态</th></tr>
+        </thead>
+        <tbody id="positions-tbody"><tr><td colspan="8" class="no-data">无持仓</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>最近成交</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>时间 (UTC)</th><th>币种</th><th>方向</th><th>价格</th><th>份额</th><th>手续费</th><th>方式</th></tr>
+        </thead>
+        <tbody id="fills-tbody"><tr><td colspan="7" class="no-data">暂无成交</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>最近信号</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>时间 (UTC)</th><th>币种</th><th>方向</th><th>公允</th><th>成交均价</th><th>Edge</th><th>入场</th><th>原因</th></tr>
+        </thead>
+        <tbody id="signals-tbody"><tr><td colspan="8" class="no-data">暂无信号</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<footer>BTCETH5M · 纸盘模拟 · 数据每 2 秒刷新 · 时间均为 UTC</footer>
+
+<dialog class="modal" id="confirm-dialog">
+  <form method="dialog">
+    <div class="modal-head">
+      <span class="modal-icon">!</span>
+      <h3>确认停止策略？</h3>
+    </div>
+    <div class="modal-body">
+      <p>停止后不会再有新的入场信号。</p>
+      <p class="dim">已经持有的仓位仍会按窗口结束时的 60s TWAP 正常结算。</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" value="cancel">取消</button>
+      <button class="btn btn-danger" value="ok">确认停止</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script src="/static/auth-nav.js?v=__ASSET_VERSION__"></script>
+<script src="/static/dashboard.js?v=__ASSET_VERSION__"></script>
+</body>
+</html>

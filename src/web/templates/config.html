@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>策略配置 - BTCETH5M</title>
+<link rel="stylesheet" href="/static/style.css?v=__ASSET_VERSION__">
+</head>
+<body>
+<nav>
+  <span class="brand">BTCETH5M</span>
+  <a href="/">控制台</a>
+  <a href="/trades">交易记录</a>
+  <a href="/config" class="active">策略配置</a>
+  <div class="nav-right">
+    <span id="auth-area" class="nav-auth"></span>
+    <span class="live-dot offline" id="live-dot"></span>
+    <span id="live-label">连接中</span>
+    <span id="clock" class="mono"></span>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="page-head">
+    <div>
+      <h1>策略配置</h1>
+      <div class="page-sub">在线调整纸盘参数 · 保存后下一 tick 生效</div>
+    </div>
+    <div class="head-meta">
+      当前模式：<b id="mode">--</b><br>
+      数据库：<span class="mono" id="db-path">--</span>
+    </div>
+  </div>
+
+  <div class="alert info">
+    参数保存在 SQLite（<span class="mono" id="db-path-note">/app/data/poly5m.db</span>），
+    重启或重新部署不会丢失；保存后立即生效。
+    密钥类配置（<code>WEB_PASSWORD</code>、实盘 API Key）不在此页，请改环境变量并重启。
+  </div>
+
+  <div id="groups"><div class="no-data">加载中...</div></div>
+
+  <div class="save-bar">
+    <span class="save-msg muted" id="save-msg">没有待保存的修改</span>
+    <button class="btn btn-ghost" id="reset-btn" type="button">恢复默认</button>
+    <button class="btn btn-primary" id="save-btn" type="button" disabled>保存配置</button>
+  </div>
+</div>
+
+<footer>BTCETH5M · 修改参数会影响下一 tick 的纸盘入场</footer>
+
+<script src="/static/auth-nav.js?v=__ASSET_VERSION__"></script>
+<script src="/static/config.js?v=__ASSET_VERSION__"></script>
+</body>
+</html>

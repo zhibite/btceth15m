@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -69,6 +69,7 @@ class AppSettings(BaseSettings):
     web_port: int = 8036
     web_username: str = "admin"
     web_password: str = ""
+    web_session_ttl_s: int = 7 * 24 * 3600
     web_enabled: bool = True
 
     paper_trading: bool = True
@@ -105,22 +106,21 @@ class StrategyParams(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     # Entry: fair - executable_ask - fee >= min_edge + model_buffer
-    min_edge: float = 0.05
-    model_buffer: float = 0.02
-    max_position_usd: float = 5.0
-    daily_loss_limit_usd: float = 20.0
-    entry_min_rel_s: int = 60
-    entry_max_rel_s: int = 285
-    max_spread: float = 0.03
-    max_stale_book_s: float = 3.0
-    min_ask_shares: float = 5.0
-    min_order_shares: float = 5.0
-    taker_fee_rate: float = 0.07
-    sigma_lookback_s: int = 600
-    min_sigma_samples: int = 120
-    engine_tick_s: float = 0.5
-    hold_to_settlement: bool = True
-    signal_log_min_edge: float = 0.02
+    min_edge: float = Field(0.05, ge=0.0, le=1.0)
+    model_buffer: float = Field(0.02, ge=0.0, le=1.0)
+    max_position_usd: float = Field(5.0, gt=0.0, le=100000.0)
+    daily_loss_limit_usd: float = Field(20.0, gt=0.0)
+    entry_min_rel_s: int = Field(60, ge=0, le=299)
+    entry_max_rel_s: int = Field(285, ge=1, le=300)
+    max_spread: float = Field(0.03, ge=0.0, le=1.0)
+    max_stale_book_s: float = Field(3.0, ge=0.1, le=60.0)
+    min_ask_shares: float = Field(5.0, ge=0.0)
+    min_order_shares: float = Field(5.0, ge=0.0)
+    taker_fee_rate: float = Field(0.07, ge=0.0, le=0.2)
+    sigma_lookback_s: int = Field(600, ge=60, le=3600)
+    min_sigma_samples: int = Field(120, ge=30, le=3000)
+    engine_tick_s: float = Field(0.5, ge=0.1, le=60.0)
+    signal_log_min_edge: float = Field(0.02, ge=0.0, le=1.0)
 
 
 def _toml_settings() -> dict[str, Any]:
@@ -148,6 +148,7 @@ def _toml_settings() -> dict[str, Any]:
         "web_port": w.get("PORT", 8036),
         "web_username": w.get("USERNAME", "admin"),
         "web_password": w.get("PASSWORD", ""),
+        "web_session_ttl_s": w.get("SESSION_TTL_S", 7 * 24 * 3600),
         "paper_trading": e.get("PAPER_TRADING", True),
         "live_enabled": e.get("LIVE_ENABLED", False),
         "data_dir": str(ROOT / "data"),
