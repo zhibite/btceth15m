@@ -102,13 +102,6 @@ function sourceClass(row) {
       : "global";
 }
 
-function sourceTitle(row) {
-  if (row.mode === "live" && row.effective_mode !== "live") {
-    return "实盘不可用，当前按纸盘运行";
-  }
-  return "参数来源：" + sourceLabel(row);
-}
-
 function modeSelect(row) {
   const live = DATA.live || {};
   const labels = { inherit: "跟随全局", paper: "纸盘", live: "实盘" };
@@ -152,13 +145,14 @@ function renderAssetTable() {
       inherited: Object.assign({}, row.inherited),
       override_fields: (row.override_fields || []).slice(),
     };
-    const warn = row.mode === "live" && row.effective_mode !== "live"
-      ? '<span class="asset-warn" title="实盘不可用，当前按纸盘运行">!</span>'
-      : "";
+    const liveWarn = row.mode === "live" && row.effective_mode !== "live";
+    const dotClass = liveWarn ? "warn" : sourceClass(row);
+    const title = `${row.asset} · ${sourceLabel(row)}` +
+      (liveWarn ? " · 实盘不可用，当前按纸盘" : "");
     return `<tr data-asset="${esc(row.asset)}" class="${row.enabled ? "" : "asset-off"}">
-      <td class="asset-name">
+      <td class="asset-name" title="${esc(title)}">
         <span class="asset-code">${esc(row.asset)}</span>
-        <span class="asset-source ${sourceClass(row)}" title="${esc(sourceTitle(row))}">${esc(sourceLabel(row))}</span>${warn}
+        <span class="asset-dot ${dotClass}"></span>
       </td>
       <td class="config-center">
         <input type="checkbox" data-role="enabled" class="config-check"${row.enabled ? " checked" : ""}>
