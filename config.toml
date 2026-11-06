@@ -65,21 +65,57 @@ SIGNAL_LOG_MIN_EDGE = 0.02
 # current global value; the config page can still save per-asset overrides on
 # top of these (stored in SQLite).
 #
-# BNB/SOL/XRP/DOGE/HYPE intentionally have no table here: they run the same
-# common parameters ("统一参数纸盘") until their own 15m backtests exist.
-#
-# 15m defaults from the 7-day backtest (2026-10-30 → 2026-11-06, 662 windows
-# per asset, Binance proxy + last-trade prices + 1/2/3¢ slippage).
-# Both gated configs stayed positive in out-of-sample walk-forward at all
-# three slippage levels; this is still a small sample, so keep paper size.
+# 15m defaults from the 7-day backtest (2026-10-30 → 2026-11-06, 662-663
+# windows per asset, Binance proxy + last-trade prices + 1/2/3¢ slippage).
+# The gated 630-870 config stayed positive across all three slippage levels
+# for BNB/DOGE/HYPE; SOL/XRP are positive but have fewer trades and a less
+# stable walk-forward, so keep them paper-only until more data.
 [STRATEGY.BTC]
 ENTRY_MIN_REL_S = 630
+# BTC keeps the earlier 630-810 window.
 ENTRY_MAX_REL_S = 810
 MODEL_BUFFER = 0.05
 MIN_FAIR = 0.65
 MIN_ENTRY_PRICE = 0.55
 
 [STRATEGY.ETH]
+ENTRY_MIN_REL_S = 630
+ENTRY_MAX_REL_S = 870
+MODEL_BUFFER = 0.05
+MIN_FAIR = 0.65
+MIN_ENTRY_PRICE = 0.55
+
+[STRATEGY.BNB]
+ENTRY_MIN_REL_S = 630
+ENTRY_MAX_REL_S = 870
+MODEL_BUFFER = 0.05
+MIN_FAIR = 0.65
+MIN_ENTRY_PRICE = 0.55
+
+[STRATEGY.SOL]
+# Fewer trades (45-57) and the 1¢ walk-forward was negative: paper only.
+ENTRY_MIN_REL_S = 630
+ENTRY_MAX_REL_S = 870
+MODEL_BUFFER = 0.05
+MIN_FAIR = 0.65
+MIN_ENTRY_PRICE = 0.55
+
+[STRATEGY.XRP]
+# Positive full-sample but walk-forward turns negative at 2/3¢: paper only.
+ENTRY_MIN_REL_S = 630
+ENTRY_MAX_REL_S = 870
+MODEL_BUFFER = 0.05
+MIN_FAIR = 0.65
+MIN_ENTRY_PRICE = 0.55
+
+[STRATEGY.DOGE]
+ENTRY_MIN_REL_S = 630
+ENTRY_MAX_REL_S = 870
+MODEL_BUFFER = 0.05
+MIN_FAIR = 0.65
+MIN_ENTRY_PRICE = 0.55
+
+[STRATEGY.HYPE]
 ENTRY_MIN_REL_S = 630
 ENTRY_MAX_REL_S = 870
 MODEL_BUFFER = 0.05

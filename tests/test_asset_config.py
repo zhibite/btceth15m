@@ -79,6 +79,14 @@ def test_shipped_asset_defaults_are_loaded_from_toml():
     assert eth["min_fair"] == 0.65
     assert eth["min_entry_price"] == 0.55
 
+    for name in ("BNB", "SOL", "XRP", "DOGE", "HYPE"):
+        values = defaults.get(name, {})
+        assert values.get("entry_min_rel_s") == 630
+        assert values.get("entry_max_rel_s") == 870
+        assert values.get("model_buffer") == 0.05
+        assert values.get("min_fair") == 0.65
+        assert values.get("min_entry_price") == 0.55
+
 
 def test_asset_defaults_merge_over_global_and_reset():
     db = _FakeDB()
@@ -140,24 +148,26 @@ def test_asset_override_is_partial_and_inherits_later_global_changes():
 def test_replace_key_overrides_replaces_only_key_fields():
     db = _FakeDB()
     runtime = RuntimeConfig(db)
-    runtime.update({"min_edge": 0.11, "max_spread": 0.02}, asset="SOL")
+    # Use an asset without a [STRATEGY.<ASSET>] table so "inherit" means the
+    # global defaults rather than an asset_default layer.
+    runtime.update({"min_edge": 0.11, "max_spread": 0.02}, asset="XYZ")
 
-    runtime.replace_key_overrides("SOL", {"model_buffer": 0.04})
+    runtime.replace_key_overrides("XYZ", {"model_buffer": 0.04})
 
-    sol = runtime.params_for("SOL")
-    assert sol.model_buffer == 0.04
+    asset = runtime.params_for("XYZ")
+    assert asset.model_buffer == 0.04
     # min_edge was a key field omitted from the patch -> back to inherit.
-    assert sol.min_edge == runtime.params.min_edge
+    assert asset.min_edge == runtime.params.min_edge
     # Non-key legacy snapshot values are preserved.
-    assert sol.max_spread == 0.02
-    assert set(runtime.override_fields_for("SOL")) == {"model_buffer", "max_spread"}
+    assert asset.max_spread == 0.02
+    assert set(runtime.override_fields_for("XYZ")) == {"model_buffer", "max_spread"}
 
-    runtime.replace_key_overrides("SOL", {})
-    assert runtime.params_for("SOL").model_buffer == runtime.params.model_buffer
-    assert runtime.params_for("SOL").max_spread == 0.02
+    runtime.replace_key_overrides("XYZ", {})
+    assert runtime.params_for("XYZ").model_buffer == runtime.params.model_buffer
+    assert runtime.params_for("XYZ").max_spread == 0.02
     # The legacy non-key field is still an override; only key fields were reset.
-    assert runtime.has_override("SOL")
-    assert runtime.override_fields_for("SOL") == ["max_spread"]
+    assert runtime.has_override("XYZ")
+    assert runtime.override_fields_for("XYZ") == ["max_spread"]
 
 
 def test_asset_state_defaults_and_persistence():
