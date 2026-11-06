@@ -112,16 +112,35 @@ function renderPositions(rows) {
 }
 
 function renderFills(rows) {
-  const html = rows.map((f) => `<tr>
-    <td class="mono">${utcTime(f.ts)}</td>
-    <td>${esc(f.asset)}</td>
-    <td><span class="pill ${f.side === "BUY" ? "buy" : "sell"}">${f.side === "BUY" ? "买入" : "卖出"}</span></td>
-    <td class="mono">${fmt(f.price, 3)}</td>
-    <td class="mono">${fmt(f.size, 2)}</td>
-    <td class="mono">$${fmt(f.fee, 4)}</td>
-    <td>${f.role === "TAKER" ? "Taker" : f.role === "MAKER" ? "Maker" : esc(f.role || "--")}</td>
-  </tr>`).join("");
-  $("fills-tbody").innerHTML = html || '<tr><td colspan="7" class="no-data">暂无成交</td></tr>';
+  const html = rows.map((f) => {
+    const outcome = f.window_outcome || f.position_outcome;
+    const settled = f.position_status === "settled" && Boolean(outcome);
+    const win = settled && f.position_side === outcome;
+    const result = settled
+      ? `${outcomePill(outcome)} <span class="${win ? "green" : "red"}">${win ? "赢" : "输"}</span>`
+      : '<span class="muted">进行中</span>';
+    const pnlValue = settled ? f.position_pnl : null;
+    const roi = settled && Number(f.position_cost) > 0
+      ? Number(f.position_pnl) / Number(f.position_cost)
+      : null;
+    const pnl = pnlValue === null || pnlValue === undefined
+      ? "--"
+      : `<span class="${pnlClass(pnlValue)}">${money(pnlValue)}</span>` +
+        (roi === null ? "" : ` <span class="muted">(${pct(roi)})</span>`);
+    return `<tr>
+      <td class="mono">${utcTime(f.ts)}</td>
+      <td>${esc(f.asset)}</td>
+      <td><span class="pill ${f.side === "BUY" ? "buy" : "sell"}">${f.side === "BUY" ? "买入" : "卖出"}</span></td>
+      <td>${outcomePill(f.position_side)}</td>
+      <td class="mono">${fmt(f.price, 3)}</td>
+      <td class="mono">${fmt(f.size, 2)}</td>
+      <td class="mono">$${fmt(f.fee, 4)}</td>
+      <td>${f.role === "TAKER" ? "Taker" : f.role === "MAKER" ? "Maker" : esc(f.role || "--")}</td>
+      <td>${result}</td>
+      <td class="mono">${pnl}</td>
+    </tr>`;
+  }).join("");
+  $("fills-tbody").innerHTML = html || '<tr><td colspan="10" class="no-data">暂无成交</td></tr>';
 }
 
 function renderSignals(rows) {

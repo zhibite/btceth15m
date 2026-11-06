@@ -422,8 +422,31 @@ class Database:
     def recent_fills(
         self, limit: int = 100, offset: int = 0
     ) -> list[dict[str, Any]]:
+        # Attach the window outcome and the position PnL so the fills table can
+        # show "final result / win-loss / profit" without a second request.
+        # Current strategy is one position per window, so one fill maps to the
+        # whole position; a future multi-fill position would repeat the total
+        # position PnL on each fill row.
         return self._query(
-            "SELECT * FROM fills ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?",
+            """
+            SELECT
+              f.*,
+              w.outcome        AS window_outcome,
+              w.final_price    AS window_final_price,
+              w.price_to_beat  AS window_price_to_beat,
+              p.side           AS position_side,
+              p.outcome        AS position_outcome,
+              p.pnl            AS position_pnl,
+              p.cost           AS position_cost,
+              p.status         AS position_status
+            FROM fills f
+            LEFT JOIN windows w
+              ON w.asset = f.asset AND w.start_ts = f.start_ts
+            LEFT JOIN positions p
+              ON p.asset = f.asset AND p.start_ts = f.start_ts
+            ORDER BY f.ts DESC, f.rowid DESC
+            LIMIT ? OFFSET ?
+            """,
             (int(limit), int(offset)),
         )
 

@@ -55,6 +55,48 @@ def test_settings_roundtrip(tmp_path):
     db.close()
 
 
+def test_fill_join_exposes_result_and_pnl(tmp_path):
+    db = Database(tmp_path / "fills.db")
+    db.upsert_window(
+        WindowMarket(
+            asset="BTC",
+            start_ts=1000,
+            end_ts=1300,
+            slug="btc-updown-5m-1000",
+            up_token="up",
+            down_token="down",
+            price_to_beat=100.0,
+        )
+    )
+    pos = PaperPosition(
+        id=0,
+        asset="BTC",
+        start_ts=1000,
+        end_ts=1300,
+        token_id="up",
+        side="UP",
+        size=10.0,
+        avg_price=0.5,
+        cost=5.1,
+        fees=0.1,
+        entry_ts=1001.0,
+        price_to_beat=100.0,
+    )
+    pid = db.insert_position(pos)
+    db.insert_fill(
+        "f1", "o1", 1001.0, "BTC", 1000, "up", "BUY", 0.5, 10.0, 0.1, "TAKER"
+    )
+    db.settle_position(pid, "UP", payout=10.0, pnl=4.9)
+    db.set_window_final("BTC", 1000, 101.0, "UP")
+
+    row = db.recent_fills(1)[0]
+    assert row["window_outcome"] == "UP"
+    assert row["position_side"] == "UP"
+    assert row["position_status"] == "settled"
+    assert abs(float(row["position_pnl"]) - 4.9) < 1e-9
+    db.close()
+
+
 def test_signal_pagination(tmp_path):
     db = Database(tmp_path / "pagination.db")
     for i in range(25):
