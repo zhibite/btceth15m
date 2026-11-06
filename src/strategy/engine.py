@@ -47,8 +47,10 @@ class StrategyEngine:
         books: ClobWsFeed,
         paper: PaperBroker,
         router: BrokerRouter,
+        latency=None,
     ) -> None:
         self.settings = settings
+        self.latency = latency
         self.runtime = runtime
         self.db = db
         self.kill = killswitch
@@ -256,7 +258,17 @@ class StrategyEngine:
             # ── execute the winning candidate ────────────────────────────
             side = str(best["side"])
             token = market.token_for(side)
-            asks = self.books.book(token).asks_ascending() if self.books.book(token) else []
+            book = self.books.book(token)
+            asks = book.asks_ascending() if book is not None else []
+            decision_ts = time.time()
+            data_age_ms = (
+                (decision_ts - buf.last_recv_ts) * 1000.0 if buf.last_recv_ts else None
+            )
+            book_age_ms = (
+                (decision_ts - book.updated_ts) * 1000.0
+                if book is not None and book.updated_ts
+                else None
+            )
             try:
                 pos = await self.router.buy(
                     market=market,
@@ -272,6 +284,21 @@ class StrategyEngine:
                 payload["status"] = f"execution_error: {exc}"
                 self._publish(asset, payload)
                 continue
+
+            fill_ts = time.time()
+            if self.latency is not None:
+                self.latency.record_decision(
+                    ts=decision_ts,
+                    asset=asset,
+                    window_start=market.start_ts,
+                    data_age_ms=data_age_ms,
+                    book_age_ms=book_age_ms,
+                    fill_ms=(fill_ts - decision_ts) * 1000.0,
+                    note=(
+                        f"{side} edge={best['edge']:.3f} "
+                        f"{'entered' if pos else 'fill_rejected'}"
+                    ),
+                )
 
             if pos is None:
                 payload["status"] = "fill_rejected"

@@ -54,7 +54,14 @@ def _get_state() -> Any:
 def _asset_version() -> str:
     digest = hashlib.md5()
     try:
-        for name in ("style.css", "auth-nav.js", "dashboard.js", "config.js", "trades.js"):
+        for name in (
+            "style.css",
+            "auth-nav.js",
+            "dashboard.js",
+            "config.js",
+            "trades.js",
+            "latency.js",
+        ):
             path = STATIC_DIR / name
             if path.exists():
                 digest.update(path.read_bytes())
@@ -218,6 +225,14 @@ async def page_config(request: Request) -> Any:
     return _render("config.html")
 
 
+@app.get("/latency", response_class=HTMLResponse)
+async def page_latency(request: Request) -> Any:
+    redirect = _login_redirect(request)
+    if redirect is not None:
+        return redirect
+    return _render("latency.html")
+
+
 # ---------------------------------------------------------------------------
 # Health + read APIs
 # ---------------------------------------------------------------------------
@@ -242,6 +257,30 @@ async def api_status(_: None = Depends(require_read)) -> dict:
                 "clob": state.books.health(),
             },
             "config": state.runtime.params.model_dump(),
+        }
+    )
+
+
+@app.get("/api/latency")
+async def api_latency(
+    hours: int = Query(24, ge=1, le=168),
+    _: None = Depends(require_read),
+) -> dict:
+    state = _get_state()
+    tracker = getattr(state, "latency", None)
+    if tracker is None:
+        raise HTTPException(status_code=503, detail="latency tracker not attached")
+    return _clean(
+        {
+            "summary": tracker.summary(900),
+            "decision": tracker.decision_summary(3600),
+            "buckets": state.db.recent_latency_buckets(hours, limit=500),
+            "events": state.db.recent_latency_events(100),
+            "feeds": {"rtds": state.rtds.health(), "clob": state.books.health()},
+            "note": (
+                "publish→recv 包含本机与 RTDS 的时钟偏差；"
+                "client 最小值可作为网络+解析+偏差的上界。"
+            ),
         }
     )
 

@@ -109,6 +109,8 @@ class PriceBuffer:
 
 
 class RtdsFeed:
+    TOPIC = "crypto_prices_chainlink"
+
     def __init__(
         self,
         assets: list[str],
@@ -116,9 +118,11 @@ class RtdsFeed:
         buffer_s: float = 900.0,
         reconnect_base_s: float = 1.0,
         reconnect_max_s: float = 30.0,
+        latency=None,
     ) -> None:
         self.assets = [a.upper() for a in assets]
         self.url = url
+        self.latency = latency
         self.reconnect_base_s = float(reconnect_base_s)
         self.reconnect_max_s = float(reconnect_max_s)
         self.buffers = {a: PriceBuffer(buffer_s) for a in self.assets}
@@ -195,7 +199,7 @@ class RtdsFeed:
                             msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
                         except asyncio.TimeoutError:
                             continue
-                        self._handle(asset, msg)
+                        self._handle(asset, msg, time.time())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -207,7 +211,7 @@ class RtdsFeed:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2.0, self.reconnect_max_s)
 
-    def _handle(self, asset: str, msg) -> None:
+    def _handle(self, asset: str, msg, recv_ts: float | None = None) -> None:
         try:
             data = json.loads(msg)
         except (TypeError, ValueError):
@@ -217,6 +221,7 @@ class RtdsFeed:
         payload = data.get("payload")
         if not isinstance(payload, dict):
             return
+        recv_ts = float(recv_ts if recv_ts is not None else time.time())
         buf = self.buffers[asset]
         if "data" in payload:
             for item in payload.get("data") or []:
@@ -226,9 +231,12 @@ class RtdsFeed:
                     continue
         elif "timestamp" in payload and "value" in payload:
             try:
-                buf.add(
-                    float(payload["timestamp"]) / 1000.0,
-                    float(payload["value"]),
-                )
+                data_ts_ms = float(payload["timestamp"])
+                buf.add(data_ts_ms / 1000.0, float(payload["value"]))
+                publish_ts_ms = float(data.get("timestamp") or 0.0)
+                if self.latency is not None and publish_ts_ms > 0:
+                    self.latency.record_rtds(
+                        asset, self.TOPIC, data_ts_ms, publish_ts_ms, recv_ts
+                    )
             except (KeyError, TypeError, ValueError):
                 pass

@@ -20,6 +20,7 @@ from src.execution.paper import PaperBroker
 from src.execution.router import BrokerRouter
 from src.feeds.clob_ws import ClobWsFeed
 from src.feeds.rtds import RtdsFeed
+from src.infra.latency import LatencyTracker
 from src.infra.logging import configure_logging, get_logger
 from src.market.gamma import GammaClient
 from src.market.window_manager import WindowManager
@@ -46,6 +47,7 @@ class AppState:
     paper: PaperBroker
     router: BrokerRouter
     engine: StrategyEngine
+    latency: LatencyTracker
     started_at: float
 
 
@@ -101,6 +103,7 @@ async def main() -> None:
         )
 
     db = Database(settings.db_path)
+    latency = LatencyTracker(db)
     runtime = RuntimeConfig(db, get_strategy_defaults())
     kill = KillSwitch(db)
     risk = RiskManager(db, runtime, kill)
@@ -116,6 +119,7 @@ async def main() -> None:
         buffer_s=settings.price_buffer_s,
         reconnect_base_s=settings.reconnect_base_s,
         reconnect_max_s=settings.reconnect_max_s,
+        latency=latency,
     )
     books = ClobWsFeed(
         settings.assets_list,
@@ -137,6 +141,7 @@ async def main() -> None:
         books=books,
         paper=paper,
         router=router,
+        latency=latency,
     )
     windows.on_window = engine.on_window
 
@@ -153,6 +158,7 @@ async def main() -> None:
         paper=paper,
         router=router,
         engine=engine,
+        latency=latency,
         started_at=time.time(),
     )
 
@@ -194,6 +200,7 @@ async def main() -> None:
         await windows.stop()
         await books.stop()
         await rtds.stop()
+        latency.flush(force=True)
         await gamma.close()
         if web_task is not None:
             web_task.cancel()

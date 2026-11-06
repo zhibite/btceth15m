@@ -102,11 +102,35 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS latency_buckets (
+  bucket_ts    INTEGER NOT NULL,
+  asset        TEXT NOT NULL,
+  topic        TEXT NOT NULL,
+  n            INTEGER NOT NULL,
+  internal_p50 REAL, internal_p95 REAL, internal_max REAL,
+  client_p50   REAL, client_p95   REAL, client_max   REAL,
+  e2e_p50      REAL, e2e_p95      REAL, e2e_max      REAL,
+  PRIMARY KEY (bucket_ts, asset, topic)
+);
+
+CREATE TABLE IF NOT EXISTS latency_events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts           REAL NOT NULL,
+  asset        TEXT NOT NULL,
+  window_start INTEGER,
+  data_age_ms  REAL,
+  book_age_ms  REAL,
+  fill_ms      REAL,
+  note         TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_windows_start ON windows(start_ts);
 CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts);
 CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts);
 CREATE INDEX IF NOT EXISTS idx_fills_ts ON fills(ts);
 CREATE INDEX IF NOT EXISTS idx_positions_settled ON positions(settled_ts);
+CREATE INDEX IF NOT EXISTS idx_latency_buckets_ts ON latency_buckets(bucket_ts);
+CREATE INDEX IF NOT EXISTS idx_latency_events_ts ON latency_events(ts);
 """
 
 
@@ -435,6 +459,108 @@ class Database:
             "FROM positions WHERE status='settled' AND settled_ts IS NOT NULL "
             "GROUP BY day ORDER BY day DESC LIMIT ?",
             (int(days),),
+        )
+
+    # ── latency ──────────────────────────────────────────────────────────
+    def upsert_latency_bucket(
+        self,
+        *,
+        bucket_ts: int,
+        asset: str,
+        topic: str,
+        n: int,
+        internal_p50: Optional[float],
+        internal_p95: Optional[float],
+        internal_max: Optional[float],
+        client_p50: Optional[float],
+        client_p95: Optional[float],
+        client_max: Optional[float],
+        e2e_p50: Optional[float],
+        e2e_p95: Optional[float],
+        e2e_max: Optional[float],
+    ) -> None:
+        self._exec(
+            """
+            INSERT INTO latency_buckets (
+              bucket_ts, asset, topic, n,
+              internal_p50, internal_p95, internal_max,
+              client_p50, client_p95, client_max,
+              e2e_p50, e2e_p95, e2e_max
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(bucket_ts, asset, topic) DO UPDATE SET
+              n=excluded.n,
+              internal_p50=excluded.internal_p50,
+              internal_p95=excluded.internal_p95,
+              internal_max=excluded.internal_max,
+              client_p50=excluded.client_p50,
+              client_p95=excluded.client_p95,
+              client_max=excluded.client_max,
+              e2e_p50=excluded.e2e_p50,
+              e2e_p95=excluded.e2e_p95,
+              e2e_max=excluded.e2e_max
+            """,
+            (
+                int(bucket_ts),
+                str(asset),
+                str(topic),
+                int(n),
+                internal_p50,
+                internal_p95,
+                internal_max,
+                client_p50,
+                client_p95,
+                client_max,
+                e2e_p50,
+                e2e_p95,
+                e2e_max,
+            ),
+        )
+
+    def recent_latency_buckets(
+        self, hours: int = 24, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        since = int(time.time() - float(hours) * 3600.0)
+        return self._query(
+            "SELECT * FROM latency_buckets WHERE bucket_ts >= ? "
+            "ORDER BY bucket_ts DESC LIMIT ?",
+            (since, int(limit)),
+        )
+
+    def insert_latency_event(
+        self,
+        *,
+        ts: float,
+        asset: str,
+        window_start: int,
+        data_age_ms: Optional[float],
+        book_age_ms: Optional[float],
+        fill_ms: Optional[float],
+        note: str = "",
+    ) -> None:
+        self._exec(
+            "INSERT INTO latency_events "
+            "(ts, asset, window_start, data_age_ms, book_age_ms, fill_ms, note) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                float(ts),
+                str(asset),
+                int(window_start),
+                data_age_ms,
+                book_age_ms,
+                fill_ms,
+                note,
+            ),
+        )
+
+    def recent_latency_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        return self._query(
+            "SELECT * FROM latency_events ORDER BY id DESC LIMIT ?", (int(limit),)
+        )
+
+    def latency_events_since(self, since: float) -> list[dict[str, Any]]:
+        return self._query(
+            "SELECT * FROM latency_events WHERE ts >= ? ORDER BY id DESC",
+            (float(since),),
         )
 
     # ── settings ─────────────────────────────────────────────────────────

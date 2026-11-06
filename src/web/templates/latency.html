@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>延迟监控 - BTCETH5M</title>
+<link rel="stylesheet" href="/static/style.css?v=__ASSET_VERSION__">
+</head>
+<body>
+<nav>
+  <span class="brand">BTCETH5M</span>
+  <a href="/">控制台</a>
+  <a href="/trades">交易记录</a>
+  <a href="/config">策略配置</a>
+  <a href="/latency" class="active">延迟监控</a>
+  <div class="nav-right">
+    <span id="auth-area" class="nav-auth"></span>
+    <span class="live-dot offline" id="live-dot"></span>
+    <span id="live-label">连接中</span>
+    <span id="clock" class="mono"></span>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="page-head">
+    <div>
+      <h1>延迟监控</h1>
+      <div class="page-sub">RTDS 数据 → 发布 → 本机 → 决策 → 成交</div>
+    </div>
+    <div class="head-meta">
+      汇总：最近 15 分钟<br>
+      历史：最近 24 小时
+    </div>
+  </div>
+
+  <div class="alert info" id="latency-conclusion">等待 RTDS 样本…</div>
+
+  <div class="stats-row" id="latency-cards"></div>
+
+  <div class="section">
+    <h2>最近 15 分钟 <span class="pill" id="summary-count">0</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>币种</th><th>主题</th><th>样本</th>
+            <th>内部 p50</th><th>内部 p95</th><th>内部 p99</th>
+            <th>发布→收到 p50</th><th>p95</th><th>p99</th><th>最小值</th>
+            <th>E2E p50</th><th>p95</th><th>p99</th>
+          </tr>
+        </thead>
+        <tbody id="summary-tbody"><tr><td colspan="13" class="no-data">等待样本...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>分钟分桶 <span class="pill" id="bucket-count">0</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>时间 (UTC)</th><th>币种</th><th>样本</th>
+            <th>内部 p50</th><th>内部 p95</th>
+            <th>发布→收到 p50</th><th>p95</th>
+            <th>E2E p50</th><th>p95</th>
+          </tr>
+        </thead>
+        <tbody id="buckets-tbody"><tr><td colspan="9" class="no-data">暂无历史</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>入场决策 <span class="pill" id="event-count">0</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>时间 (UTC)</th><th>币种</th><th>窗口</th>
+            <th>数据年龄</th><th>盘口年龄</th><th>决策→成交</th><th>说明</th>
+          </tr>
+        </thead>
+        <tbody id="events-tbody"><tr><td colspan="7" class="no-data">暂无入场</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="alert info" id="latency-note">
+    publish→recv 包含本机与 RTDS 的时钟偏差；client 最小值可作为网络+解析+偏差的上界。
+    决策→成交是纸盘模拟的即时成交，接入实盘后应看 CLOB 下单确认延迟。
+  </div>
+</div>
+
+<footer>BTCETH5M · 延迟指标每 5 秒刷新</footer>
+
+<script src="/static/auth-nav.js?v=__ASSET_VERSION__"></script>
+<script src="/static/latency.js?v=__ASSET_VERSION__"></script>
+</body>
+</html>
