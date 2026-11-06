@@ -8,6 +8,7 @@ written to config.toml or returned by the dashboard API.
 """
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from functools import lru_cache
@@ -122,6 +123,14 @@ class StrategyParams(BaseModel):
     engine_tick_s: float = Field(0.5, ge=0.1, le=60.0)
     signal_log_min_edge: float = Field(0.02, ge=0.0, le=1.0)
 
+    # Maker shadow: simulate a maker-first policy next to the real taker
+    # paper fill. It never changes the paper position or PnL; it only records
+    # the counterfactual for comparison.
+    maker_shadow_enabled: bool = True
+    maker_buffer: float = Field(0.01, ge=0.0, le=0.5)
+    maker_fallback_rel_s: int = Field(250, ge=0, le=300)
+    maker_chase_bid: bool = True
+
 
 def _toml_settings() -> dict[str, Any]:
     g, f, w, e = (
@@ -178,33 +187,81 @@ def get_strategy_defaults() -> StrategyParams:
 
 
 class RuntimeConfig:
-    """Strategy params persisted in SQLite so dashboard edits survive restarts."""
+    """Strategy params persisted in SQLite so dashboard edits survive restarts.
+
+    Two layers:
+      * ``params`` — global defaults, used when an asset has no override.
+      * ``asset_params`` — per-asset overrides keyed by upper-case asset.
+    """
 
     KEY = "strategy_params"
+    ASSET_KEY = "asset_strategy_params"
 
     def __init__(self, db: Any, defaults: StrategyParams | None = None) -> None:
         self._db = db
         self._defaults = defaults or get_strategy_defaults()
-        raw = db.get_setting(self.KEY) if db is not None else None
+        self.params = self._load(self.KEY, self._defaults)
+        self.asset_params: dict[str, StrategyParams] = {}
+        raw = db.get_setting(self.ASSET_KEY) if db is not None else None
         if raw:
             try:
-                self.params = StrategyParams.model_validate_json(raw)
+                data = json.loads(raw)
+                for asset, value in (data or {}).items():
+                    self.asset_params[str(asset).upper()] = StrategyParams.model_validate(
+                        value
+                    )
             except Exception:  # noqa: BLE001
-                self.params = self._defaults
+                self.asset_params = {}
+
+    def _load(self, key: str, default: StrategyParams) -> StrategyParams:
+        raw = self._db.get_setting(key) if self._db is not None else None
+        if raw:
+            try:
+                return StrategyParams.model_validate_json(raw)
+            except Exception:  # noqa: BLE001
+                pass
+        return default
+
+    def params_for(self, asset: str | None) -> StrategyParams:
+        if not asset:
+            return self.params
+        return self.asset_params.get(str(asset).upper(), self.params)
+
+    def has_override(self, asset: str | None) -> bool:
+        return bool(asset) and str(asset).upper() in self.asset_params
+
+    def _save_assets(self) -> None:
+        if self._db is None:
+            return
+        payload = {
+            asset: params.model_dump() for asset, params in self.asset_params.items()
+        }
+        self._db.set_setting(self.ASSET_KEY, json.dumps(payload))
+
+    def update(
+        self, patch: dict[str, Any], asset: str | None = None
+    ) -> StrategyParams:
+        key = str(asset).upper() if asset else None
+        merged = self.params_for(key).model_dump()
+        for name, value in patch.items():
+            if name in merged:
+                merged[name] = value
+        params = StrategyParams.model_validate(merged)
+        if key:
+            self.asset_params[key] = params
+            self._save_assets()
         else:
-            self.params = self._defaults
+            self.params = params
+            if self._db is not None:
+                self._db.set_setting(self.KEY, params.model_dump_json())
+        return params
 
-    def update(self, patch: dict[str, Any]) -> StrategyParams:
-        merged = self.params.model_dump()
-        for key, value in patch.items():
-            if key in merged:
-                merged[key] = value
-        self.params = StrategyParams.model_validate(merged)
-        if self._db is not None:
-            self._db.set_setting(self.KEY, self.params.model_dump_json())
-        return self.params
-
-    def reset(self) -> StrategyParams:
+    def reset(self, asset: str | None = None) -> StrategyParams:
+        key = str(asset).upper() if asset else None
+        if key:
+            self.asset_params.pop(key, None)
+            self._save_assets()
+            return self.params_for(key)
         self.params = self._defaults
         if self._db is not None:
             self._db.set_setting(self.KEY, self.params.model_dump_json())

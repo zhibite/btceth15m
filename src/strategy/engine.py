@@ -16,6 +16,7 @@ import time
 from typing import Any, Optional
 
 from src.config import AppSettings, RuntimeConfig
+from src.execution.maker_shadow import MakerShadow
 from src.execution.paper import PaperBroker
 from src.execution.router import BrokerRouter
 from src.feeds.clob_ws import ClobWsFeed
@@ -48,9 +49,11 @@ class StrategyEngine:
         paper: PaperBroker,
         router: BrokerRouter,
         latency=None,
+        maker_shadow: Optional[MakerShadow] = None,
     ) -> None:
         self.settings = settings
         self.latency = latency
+        self.maker_shadow = maker_shadow
         self.runtime = runtime
         self.db = db
         self.kill = killswitch
@@ -72,6 +75,8 @@ class StrategyEngine:
     # ── lifecycle ────────────────────────────────────────────────────────
     def start(self) -> None:
         self._load_open_positions()
+        if self.maker_shadow is not None:
+            self.maker_shadow.load_active()
         self._running = True
         self._tasks = [
             asyncio.create_task(self._tick_loop(), name="engine-ticks"),
@@ -145,7 +150,22 @@ class StrategyEngine:
                 raise
             except Exception as exc:  # noqa: BLE001
                 log.exception("engine.tick_failed", error=str(exc))
-            await asyncio.sleep(max(0.1, self.runtime.params.engine_tick_s))
+            await asyncio.sleep(self._tick_interval())
+
+    def _tick_interval(self) -> float:
+        """One loop drives every asset, so honour the fastest per-asset tick.
+
+        ``engine_tick_s`` is the only knob exposed in the per-asset config that
+        is not applied inside the per-asset branch of :meth:`tick`; taking the
+        minimum means an override on any asset actually changes the cadence.
+        """
+        values = [
+            self.runtime.params_for(asset).engine_tick_s
+            for asset in self.settings.assets_list
+        ]
+        if not values:
+            values = [self.runtime.params.engine_tick_s]
+        return max(0.1, min(values))
 
     async def _settle_loop(self) -> None:
         while self._running:
@@ -160,8 +180,13 @@ class StrategyEngine:
     # ── main tick ────────────────────────────────────────────────────────
     async def tick(self) -> None:
         now = time.time()
-        params = self.runtime.params
+        if self.maker_shadow is not None:
+            trades = self.books.drain_trades()
+            if trades:
+                self.maker_shadow.on_trades(trades)
+        fair_by_asset: dict[str, Optional[float]] = {}
         for asset in self.settings.assets_list:
+            params = self.runtime.params_for(asset)
             market = self.windows.current_window(asset)
             if market is None:
                 self._publish(asset, {"status": "no_window"})
@@ -230,6 +255,7 @@ class StrategyEngine:
                 continue
 
             fair_up = float(fv["fair"])
+            fair_by_asset[asset] = fair_up
             candidates = self._candidates(market, fair_up, now, params)
             best = max(candidates, key=lambda c: c["edge"]) if candidates else None
             position = self._position_info(asset, market.start_ts)
@@ -269,6 +295,11 @@ class StrategyEngine:
                 if book is not None and book.updated_ts
                 else None
             )
+            # Snapshot the touch before the order call so the shadow quote is
+            # the book we actually decided on.
+            shadow_captured = None
+            if self.maker_shadow is not None and params.maker_shadow_enabled:
+                shadow_captured = self.maker_shadow.capture_quote(book)
             try:
                 pos = await self.router.buy(
                     market=market,
@@ -314,6 +345,17 @@ class StrategyEngine:
                 continue
 
             self.positions[(asset, market.start_ts)] = pos
+            if self.maker_shadow is not None:
+                self.maker_shadow.open_attempt(
+                    market=market,
+                    side=side,
+                    token_id=token,
+                    taker_pos=pos,
+                    fair=float(best["fair"]),
+                    now=time.time(),
+                    params=params,
+                    captured=shadow_captured,
+                )
             self._log_signal(
                 asset,
                 market,
@@ -336,6 +378,16 @@ class StrategyEngine:
                 shares=round(pos.size, 3),
             )
 
+        if self.maker_shadow is not None:
+            self.maker_shadow.on_tick(
+                now=time.time(),
+                fair_by_asset=fair_by_asset,
+                books=self.books.books,
+                params_by_asset={
+                    a: self.runtime.params_for(a) for a in self.settings.assets_list
+                },
+            )
+
     # ── filters / selection ──────────────────────────────────────────────
     def _entry_check(
         self,
@@ -348,7 +400,7 @@ class StrategyEngine:
     ) -> str:
         if position is not None:
             return "in_position"
-        ok, reason = self.risk.can_enter()
+        ok, reason = self.risk.can_enter(market.asset)
         if not ok:
             return reason
         rel = now - market.start_ts
@@ -430,8 +482,8 @@ class StrategyEngine:
             "status": status,
             "mode": self.router.mode,
             "killswitch": self.kill.to_dict(),
-            "daily_pnl": self.risk.daily_pnl(),
-            "params": self.runtime.params.model_dump(),
+            "daily_pnl": self.risk.daily_pnl(market.asset),
+            "params": self.runtime.params_for(market.asset).model_dump(),
         }
         payload.update(extra)
         return payload
@@ -520,6 +572,8 @@ class StrategyEngine:
             pnl = payout - pos.cost
             self.db.settle_position(pos.id, outcome, payout, pnl)
             self.db.set_window_final(pos.asset, pos.start_ts, final_price, outcome)
+            if self.maker_shadow is not None:
+                self.maker_shadow.settle(pos, outcome)
             log.info(
                 "engine.settled",
                 asset=pos.asset,

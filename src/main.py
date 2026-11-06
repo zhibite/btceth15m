@@ -16,6 +16,7 @@ import uvicorn
 
 from src.config import RuntimeConfig, get_settings, get_strategy_defaults
 from src.execution.live import LiveBroker
+from src.execution.maker_shadow import MakerShadow
 from src.execution.paper import PaperBroker
 from src.execution.router import BrokerRouter
 from src.feeds.clob_ws import ClobWsFeed
@@ -130,6 +131,7 @@ async def main() -> None:
     paper = PaperBroker(db, runtime)
     live = LiveBroker(settings) if settings.live_enabled else None
     router = BrokerRouter(settings, paper, live)
+    maker_shadow = MakerShadow(db)
     engine = StrategyEngine(
         settings=settings,
         runtime=runtime,
@@ -142,6 +144,7 @@ async def main() -> None:
         paper=paper,
         router=router,
         latency=latency,
+        maker_shadow=maker_shadow,
     )
     windows.on_window = engine.on_window
 

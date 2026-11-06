@@ -11,6 +11,7 @@
   <span class="brand">BTCETH5M</span>
   <a href="/">控制台</a>
   <a href="/trades">交易记录</a>
+  <a href="/maker">Maker 对照</a>
   <a href="/config" class="active">策略配置</a>
   <a href="/latency">延迟监控</a>
   <div class="nav-right">
@@ -25,10 +26,13 @@
   <div class="page-head">
     <div>
       <h1>策略配置</h1>
-      <div class="page-sub">在线调整纸盘参数</div>
+      <div class="page-sub">选择币种单独覆盖参数，未单独设置的币种继承全局默认</div>
     </div>
     <div class="head-meta">
-      当前模式：<b id="mode">--</b>
+      <label class="config-asset">币种
+        <select id="asset-select" class="market-select"></select>
+      </label>
+      <div>当前模式：<b id="mode">--</b> · <span id="override-state">--</span></div>
     </div>
   </div>
 

@@ -7,6 +7,32 @@ const PAGERS = {
   fills: { limit: 20, offset: 0, total: 0 },
   signals: { limit: 20, offset: 0, total: 0 },
 };
+let ASSET = ""; // "" = 全部币种
+
+function assetQuery() {
+  return ASSET ? "&asset=" + encodeURIComponent(ASSET) : "";
+}
+
+function ensureAssetOptions(status) {
+  const select = $("asset-filter");
+  if (!select) return;
+  // Confirmed configuration first, so the selector still works before the
+  // engine has published any tick for an asset.
+  const names = new Set(status && status.configured_assets ? status.configured_assets : []);
+  Object.keys((status && status.assets) || {}).forEach((a) => names.add(a));
+  const assets = Array.from(names).sort();
+  const existing = new Set(Array.from(select.options).map((o) => o.value));
+  for (const asset of assets) {
+    if (!existing.has(asset)) {
+      const option = document.createElement("option");
+      option.value = asset;
+      option.textContent = asset;
+      select.appendChild(option);
+    }
+  }
+  select.value = ASSET;
+  $("asset-meta").textContent = ASSET || "全部币种";
+}
 
 const fmt = (n, d = 3) => {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "--";
@@ -180,7 +206,9 @@ function updatePager(prefix, state) {
 
 async function loadWindows() {
   const state = PAGERS.windows;
-  const res = await getJSON(`/api/windows?limit=${state.limit}&offset=${state.offset}`);
+  const res = await getJSON(
+    `/api/windows?limit=${state.limit}&offset=${state.offset}${assetQuery()}`
+  );
   renderWindows(res.data || []);
   state.total = Number(res.pagination?.total || 0);
   $("window-count").textContent = String(state.total);
@@ -189,7 +217,9 @@ async function loadWindows() {
 
 async function loadPositions() {
   const state = PAGERS.positions;
-  const res = await getJSON(`/api/positions?limit=${state.limit}&offset=${state.offset}`);
+  const res = await getJSON(
+    `/api/positions?limit=${state.limit}&offset=${state.offset}${assetQuery()}`
+  );
   renderPositions(res.data || []);
   state.total = Number(res.pagination?.total || 0);
   $("position-count").textContent = String(state.total);
@@ -198,7 +228,9 @@ async function loadPositions() {
 
 async function loadFills() {
   const state = PAGERS.fills;
-  const res = await getJSON(`/api/fills?limit=${state.limit}&offset=${state.offset}`);
+  const res = await getJSON(
+    `/api/fills?limit=${state.limit}&offset=${state.offset}${assetQuery()}`
+  );
   renderFills(res.data || []);
   state.total = Number(res.pagination?.total || 0);
   $("fill-count").textContent = String(state.total);
@@ -207,7 +239,9 @@ async function loadFills() {
 
 async function loadSignals() {
   const state = PAGERS.signals;
-  const res = await getJSON(`/api/signals?limit=${state.limit}&offset=${state.offset}`);
+  const res = await getJSON(
+    `/api/signals?limit=${state.limit}&offset=${state.offset}${assetQuery()}`
+  );
   renderSignals(res.data || []);
   state.total = Number(res.pagination?.total || 0);
   $("signal-count").textContent = String(state.total);
@@ -218,8 +252,9 @@ async function refresh() {
   try {
     const [status, pnl] = await Promise.all([
       getJSON("/api/status"),
-      getJSON("/api/pnl?days=7"),
+      getJSON(`/api/pnl?days=7${assetQuery()}`),
     ]);
+    ensureAssetOptions(status);
     renderStats(pnl.summary || {});
     await Promise.all([loadWindows(), loadPositions(), loadFills(), loadSignals()]);
     renderNav(status);
@@ -245,6 +280,14 @@ document.addEventListener("DOMContentLoaded", () => {
       PAGERS[prefix].offset += PAGERS[prefix].limit;
       loaders[prefix]().catch(() => {});
     });
+  });
+  $("asset-filter").addEventListener("change", async (e) => {
+    ASSET = e.target.value;
+    $("asset-meta").textContent = ASSET || "全部币种";
+    Object.keys(PAGERS).forEach((key) => {
+      PAGERS[key].offset = 0;
+    });
+    await refresh();
   });
   $("clock").textContent = clockStr();
   setInterval(() => { $("clock").textContent = clockStr(); }, 1000);

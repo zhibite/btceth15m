@@ -46,3 +46,10 @@ SIGMA_LOOKBACK_S = 600
 MIN_SIGMA_SAMPLES = 120
 ENGINE_TICK_S = 0.5
 SIGNAL_LOG_MIN_EDGE = 0.02
+
+# Maker shadow: simulate a maker-first entry next to the real taker paper
+# fill. It only writes comparison stats; it never changes paper execution.
+MAKER_SHADOW_ENABLED = true
+MAKER_BUFFER = 0.01
+MAKER_FALLBACK_REL_S = 250
+MAKER_CHASE_BID = true

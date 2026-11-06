@@ -97,6 +97,79 @@ def test_fill_join_exposes_result_and_pnl(tmp_path):
     db.close()
 
 
+def test_asset_filters(tmp_path):
+    db = Database(tmp_path / "assets.db")
+    rows = [
+        ("BTC", 1000, "UP", "UP", 4.0),
+        ("BTC", 1300, "DOWN", "UP", -5.0),
+        ("ETH", 1000, "UP", "DOWN", -3.0),
+        ("ETH", 1300, "UP", "UP", 2.0),
+    ]
+    for asset, start, side, outcome, pnl in rows:
+        db.upsert_window(
+            WindowMarket(
+                asset=asset,
+                start_ts=start,
+                end_ts=start + 300,
+                slug=f"{asset.lower()}-updown-5m-{start}",
+                up_token="up",
+                down_token="down",
+                price_to_beat=100.0,
+            )
+        )
+        pos = PaperPosition(
+            id=0,
+            asset=asset,
+            start_ts=start,
+            end_ts=start + 300,
+            token_id="up",
+            side=side,
+            size=10.0,
+            avg_price=0.5,
+            cost=5.0,
+            fees=0.0,
+            entry_ts=start + 10,
+            price_to_beat=100.0,
+        )
+        pid = db.insert_position(pos)
+        db.settle_position(
+            pid, outcome, payout=10.0 if side == outcome else 0.0, pnl=pnl
+        )
+        db.insert_fill(
+            f"f-{asset}-{start}",
+            f"o-{asset}-{start}",
+            start + 10,
+            asset,
+            start,
+            "up",
+            "BUY",
+            0.5,
+            10.0,
+            0.0,
+            "TAKER",
+        )
+        db.set_window_final(asset, start, 101.0, outcome)
+
+    assert db.count_positions("BTC") == 2
+    assert db.count_positions("ETH") == 2
+    assert db.count_positions() == 4
+    assert len(db.recent_positions(10, 0, "BTC")) == 2
+    assert db.count_fills("BTC") == 2
+    assert len(db.recent_fills(10, 0, "BTC")) == 2
+
+    btc = db.summary("BTC")
+    eth = db.summary("ETH")
+    assert int(btc["total"]["n"]) == 2
+    assert int(eth["total"]["n"]) == 2
+    assert abs(float(btc["total"]["pnl"]) - (-1.0)) < 1e-9
+    assert abs(float(eth["total"]["pnl"]) - (-1.0)) < 1e-9
+    assert abs(float(db.summary()["total"]["pnl"]) - (-2.0)) < 1e-9
+
+    by_day = db.pnl_by_day(7, "BTC")
+    assert by_day and int(by_day[0]["n"]) == 2
+    db.close()
+
+
 def test_signal_pagination(tmp_path):
     db = Database(tmp_path / "pagination.db")
     for i in range(25):

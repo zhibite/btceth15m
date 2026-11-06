@@ -11,6 +11,7 @@
   <span class="brand">BTCETH5M</span>
   <a href="/">控制台</a>
   <a href="/trades" class="active">交易记录</a>
+  <a href="/maker">Maker 对照</a>
   <a href="/config">策略配置</a>
   <a href="/latency">延迟监控</a>
   <div class="nav-right">
@@ -22,6 +23,16 @@
 </nav>
 
 <div class="container">
+  <div class="control-bar" id="asset-bar">
+    <div class="control-status">
+      <span class="control-label">币种</span>
+      <select id="asset-filter" class="market-select">
+        <option value="">全部币种</option>
+      </select>
+      <span class="control-meta" id="asset-meta">全部币种</span>
+    </div>
+  </div>
+
   <div class="stats-row">
     <div class="stat-card">
       <div class="stat-label">今日盈亏 (UTC)</div>

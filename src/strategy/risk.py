@@ -68,22 +68,29 @@ class RiskManager:
         self._db = db
         self._runtime = runtime
         self._kill = killswitch
-        self._pnl_cache_ts = 0.0
-        self._pnl_cache = 0.0
+        self._pnl_cache: dict[str, tuple[float, float]] = {}
 
-    def daily_pnl(self) -> float:
+    def daily_pnl(self, asset: str | None = None) -> float:
+        key = str(asset).upper() if asset else ""
         now = time.time()
-        if now - self._pnl_cache_ts < 2.0:
-            return self._pnl_cache
+        cached = self._pnl_cache.get(key)
+        if cached is not None and now - cached[0] < 2.0:
+            return cached[1]
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        self._pnl_cache = float(self._db.daily_realized(today).get("pnl") or 0.0)
-        self._pnl_cache_ts = now
-        return self._pnl_cache
+        pnl = float(self._db.daily_realized(today, key or None).get("pnl") or 0.0)
+        self._pnl_cache[key] = (now, pnl)
+        return pnl
 
-    def can_enter(self) -> tuple[bool, str]:
+    def can_enter(self, asset: str | None = None) -> tuple[bool, str]:
         if self._kill.active:
             return False, "killswitch"
-        params = self._runtime.params
-        if self.daily_pnl() <= -abs(params.daily_loss_limit_usd):
+        params = self._runtime.params_for(asset)
+        if self.daily_pnl(asset) <= -abs(params.daily_loss_limit_usd):
             return False, "daily_loss_limit"
+        if asset:
+            # Portfolio-level guard keeps a bad day in one asset from being
+            # hidden by a good day in another.
+            global_params = self._runtime.params
+            if self.daily_pnl(None) <= -abs(global_params.daily_loss_limit_usd):
+                return False, "daily_loss_limit_global"
         return True, ""

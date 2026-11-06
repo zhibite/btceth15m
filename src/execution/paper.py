@@ -99,7 +99,7 @@ class PaperBroker:
         price_to_beat: float,
         reason: str = "",
     ) -> Optional[PaperPosition]:
-        params = self._runtime.params
+        params = self._runtime.params_for(market.asset)
         preview = self.preview_buy(asks, notional, params.taker_fee_rate)
         if preview is None:
             return None

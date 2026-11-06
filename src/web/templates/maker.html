@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maker 对照 - BTCETH5M</title>
+<link rel="stylesheet" href="/static/style.css?v=__ASSET_VERSION__">
+</head>
+<body>
+<nav>
+  <span class="brand">BTCETH5M</span>
+  <a href="/">控制台</a>
+  <a href="/trades">交易记录</a>
+  <a href="/maker" class="active">Maker 对照</a>
+  <a href="/config">策略配置</a>
+  <a href="/latency">延迟监控</a>
+  <div class="nav-right">
+    <span id="auth-area" class="nav-auth"></span>
+    <span class="live-dot offline" id="live-dot"></span>
+    <span id="live-label">连接中</span>
+    <span id="clock" class="mono"></span>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="page-head">
+    <div>
+      <h1>Maker 对照</h1>
+      <div class="page-sub">同一入场信号：实际 taker 成交 vs 模拟 maker-first</div>
+    </div>
+    <div class="head-meta">
+      统计：最近 14 天<br>
+      影子单不改变纸盘成交
+    </div>
+  </div>
+
+  <div class="alert info" id="maker-conclusion">等待信号…</div>
+
+  <div class="stats-row" id="maker-cards"></div>
+
+  <div class="section">
+    <h2>分币种 <span class="pill" id="asset-count">0</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>币种</th><th>信号</th><th>Maker 成交率</th><th>全成交</th><th>转 Taker</th><th>未成交</th>
+            <th>平均等待</th><th>Maker 均价</th><th>Taker 均价</th><th>省手续费</th>
+            <th>Maker PnL</th><th>Taker PnL</th><th>差</th>
+          </tr>
+        </thead>
+        <tbody id="asset-tbody"><tr><td colspan="13" class="no-data">加载中...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>最近信号 <span class="pill" id="row-count">0</span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>时间 (UTC)</th><th>币种</th><th>方向</th><th>状态</th><th>挂单价</th>
+            <th>Maker 成交</th><th>Maker 均价</th><th>等待</th>
+            <th>Taker 成交</th><th>Taker 均价</th><th>省手续费</th>
+            <th>Maker PnL</th><th>Taker PnL</th>
+          </tr>
+        </thead>
+        <tbody id="rows-tbody"><tr><td colspan="13" class="no-data">加载中...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pager" id="rows-pager">
+      <button class="btn btn-ghost btn-sm" id="rows-prev" type="button" disabled>上一页</button>
+      <span class="pager-info" id="rows-page-info">--</span>
+      <button class="btn btn-ghost btn-sm" id="rows-next" type="button" disabled>下一页</button>
+    </div>
+  </div>
+
+  <div class="alert info" id="maker-note">
+    影子单只影响本页统计，不参与纸盘成交。成交模型：挂在 best bid，排在现有一档队列之后；
+    主动卖单累计吃掉队列才成交；忽略撤单改善（偏保守），也不考虑自己的 $5 对盘口的影响。
+    deadline 前未成交且 edge 仍够时，按当前 ask 模拟 taker fallback。
+    未成交的信号 Maker 轨记 0 PnL，因此“每信号差”包含错过交易的代价。
+  </div>
+</div>
+
+<footer>BTCETH5M · Maker 对照每 10 秒刷新 · 时间均为 UTC</footer>
+
+<script src="/static/auth-nav.js?v=__ASSET_VERSION__"></script>
+<script src="/static/maker.js?v=__ASSET_VERSION__"></script>
+</body>
+</html>

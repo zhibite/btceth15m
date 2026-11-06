@@ -38,10 +38,20 @@ const GROUPS = [
       { key: "signal_log_min_edge", label: "信号记录阈值", help: "Edge 超过该值时记录未入场信号，便于复盘。", step: 0.01 },
     ],
   },
+  {
+    title: "Maker 影子",
+    fields: [
+      { key: "maker_shadow_enabled", label: "启用影子对比", type: "bool", help: "每次 taker 入场时并行模拟 maker-first 路径；只写统计，不改变实际纸盘成交。" },
+      { key: "maker_buffer", label: "Maker 安全边际", help: "挂在 bid 时额外要求的 edge，用来抵消被动成交的逆向选择。", step: 0.01 },
+      { key: "maker_fallback_rel_s", label: "转 Taker 时间", help: "窗口开始后多少秒仍未成交，就按当前 ask 模拟 taker fallback。", step: 5, unit: "秒" },
+      { key: "maker_chase_bid", label: "跟随买一", type: "bool", help: "买一上移时撤单改挂到新的 best bid；关闭则保持原价排队。" },
+    ],
+  },
 ];
 
 let DATA = null;
 let INITIAL = {};
+let ASSET = ""; // "" = 全局默认
 
 const esc = (v) =>
   String(v === null || v === undefined ? "" : v).replace(/[&<>"']/g, (c) => ({
@@ -82,6 +92,16 @@ function formatDetail(detail) {
 function fieldHtml(field) {
   const value = DATA.params[field.key];
   const unit = field.unit ? `<span class="config-unit">${esc(field.unit)}</span>` : "";
+  if (field.type === "bool") {
+    return `<div class="field" data-field="${esc(field.key)}">
+      <label>${esc(field.label)}</label>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" data-key="${esc(field.key)}"${value ? " checked" : ""}>
+      </div>
+      <div class="config-help">${esc(field.help || "")}</div>
+      <div class="config-key">${esc(field.key)}</div>
+    </div>`;
+  }
   return `<div class="field" data-field="${esc(field.key)}">
     <label>${esc(field.label)}</label>
     <div style="display:flex;align-items:center;gap:6px">
@@ -93,8 +113,28 @@ function fieldHtml(field) {
   </div>`;
 }
 
+function renderAssetSelect(assets) {
+  const select = $("asset-select");
+  if (!select) return;
+  const options = ['<option value="">全局默认</option>'].concat(
+    (assets || []).map((asset) => `<option value="${esc(asset)}">${esc(asset)}</option>`)
+  );
+  select.innerHTML = options.join("");
+  select.value = ASSET;
+}
+
 function render() {
   $("mode").textContent = DATA.mode === "paper" ? "纸盘" : "实盘";
+  const state = $("override-state");
+  if (state) {
+    state.textContent = ASSET
+      ? (DATA.overridden ? "已单独设置" : "继承全局")
+      : "全局默认";
+  }
+  const resetBtn = $("reset-btn");
+  if (resetBtn) {
+    resetBtn.textContent = ASSET ? "取消币种覆盖" : "恢复默认";
+  }
   INITIAL = Object.assign({}, DATA.params);
   $("groups").innerHTML = GROUPS.map((group) => `<div class="config-group">
     <h2><span class="dot"></span>${esc(group.title)}<span class="count">${group.fields.length} 项</span></h2>
@@ -102,18 +142,27 @@ function render() {
   </div>`).join("");
   document.querySelectorAll("#groups [data-key]").forEach((el) => {
     el.addEventListener("input", () => {
-      const changed = Number(el.value) !== Number(INITIAL[el.dataset.key]);
       const box = el.closest(".field");
-      if (box) box.classList.toggle("changed", changed);
+      if (box) box.classList.toggle("changed", fieldChanged(el));
       updateSaveState();
     });
   });
   updateSaveState();
 }
 
+function fieldChanged(el) {
+  const initial = INITIAL[el.dataset.key];
+  if (el.type === "checkbox") return el.checked !== Boolean(initial);
+  return Number(el.value) !== Number(initial);
+}
+
+function fieldValue(el) {
+  return el.type === "checkbox" ? el.checked : Number(el.value);
+}
+
 function changedFields() {
   return Array.from(document.querySelectorAll("#groups [data-key]")).filter(
-    (el) => Number(el.value) !== Number(INITIAL[el.dataset.key])
+    fieldChanged
   );
 }
 
@@ -125,9 +174,12 @@ function updateSaveState() {
     : "没有待保存的修改";
 }
 
-async function load() {
+async function load(asset = "") {
   try {
-    DATA = await getJSON("/api/config");
+    const query = asset ? "?asset=" + encodeURIComponent(asset) : "";
+    DATA = await getJSON("/api/config" + query);
+    ASSET = DATA.asset || "";
+    renderAssetSelect(DATA.assets || []);
     render();
   } catch (e) {
     if (String(e.message) === "auth") return;
@@ -138,15 +190,18 @@ async function load() {
 async function saveConfig() {
   const patch = {};
   document.querySelectorAll("#groups [data-key]").forEach((el) => {
-    patch[el.dataset.key] = Number(el.value);
+    patch[el.dataset.key] = fieldValue(el);
   });
   $("save-btn").disabled = true;
   $("save-msg").textContent = "保存中...";
   try {
-    const res = await sendJSON("/api/config", "PUT", patch);
-    DATA.params = res.params;
+    const res = await sendJSON("/api/config", "PUT", {
+      asset: ASSET,
+      params: patch,
+    });
+    DATA = Object.assign({}, DATA, res);
     render();
-    $("save-msg").textContent = "已保存";
+    $("save-msg").textContent = ASSET ? `已保存（${ASSET}）` : "已保存（全局）";
     setTimeout(updateSaveState, 4000);
   } catch (e) {
     if (String(e.message) !== "auth") {
@@ -157,12 +212,15 @@ async function saveConfig() {
 }
 
 async function resetConfig() {
-  if (!confirm("恢复 config.toml 中的默认参数？当前保存的覆盖会被清除。")) return;
+  const label = ASSET ? `${ASSET} 的币种覆盖` : "全局默认";
+  if (!confirm(`恢复${label}？`)) return;
   try {
-    const res = await sendJSON("/api/config/reset", "POST");
-    DATA.params = res.params;
+    const res = await sendJSON("/api/config/reset", "POST", { asset: ASSET });
+    DATA = Object.assign({}, DATA, res);
     render();
-    $("save-msg").textContent = "已恢复默认值";
+    $("save-msg").textContent = ASSET
+      ? `已恢复 ${ASSET} 的全局继承`
+      : "已恢复全局默认";
     setTimeout(updateSaveState, 4000);
   } catch (e) {
     if (String(e.message) !== "auth") {
@@ -193,6 +251,14 @@ async function refreshNav() {
 document.addEventListener("DOMContentLoaded", () => {
   $("save-btn").addEventListener("click", saveConfig);
   $("reset-btn").addEventListener("click", resetConfig);
+  $("asset-select").addEventListener("change", async (e) => {
+    const next = e.target.value;
+    if (changedFields().length && !confirm("当前有未保存修改，切换后会丢失，继续？")) {
+      e.target.value = ASSET;
+      return;
+    }
+    await load(next);
+  });
   $("clock").textContent = clockStr();
   setInterval(() => { $("clock").textContent = clockStr(); }, 1000);
   load();

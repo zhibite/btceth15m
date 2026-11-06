@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
 from src.config import StrategyParams
+from src.execution.maker_shadow import summarize_shadow
 from src.infra.logging import get_logger
 from src.web import auth
 
@@ -61,6 +62,7 @@ def _asset_version() -> str:
             "config.js",
             "trades.js",
             "latency.js",
+            "maker.js",
         ):
             path = STATIC_DIR / name
             if path.exists():
@@ -233,6 +235,14 @@ async def page_latency(request: Request) -> Any:
     return _render("latency.html")
 
 
+@app.get("/maker", response_class=HTMLResponse)
+async def page_maker(request: Request) -> Any:
+    redirect = _login_redirect(request)
+    if redirect is not None:
+        return redirect
+    return _render("maker.html")
+
+
 # ---------------------------------------------------------------------------
 # Health + read APIs
 # ---------------------------------------------------------------------------
@@ -251,6 +261,7 @@ async def api_status(_: None = Depends(require_read)) -> dict:
             "killswitch": state.killswitch.to_dict(),
             "summary": state.db.summary(),
             "assets": state.engine.latest,
+            "configured_assets": state.settings.assets_list,
             "positions": state.db.open_positions(),
             "feeds": {
                 "rtds": state.rtds.health(),
@@ -289,73 +300,146 @@ async def api_latency(
 async def api_windows(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    asset: str | None = Query(None),
     _: None = Depends(require_read),
 ) -> dict:
     db = _get_state().db
-    return _paginated(db.recent_windows(limit, offset), limit, offset, db.count_windows())
+    key = _asset_key(asset)
+    return _paginated(
+        db.recent_windows(limit, offset, key),
+        limit,
+        offset,
+        db.count_windows(key),
+    )
 
 
 @app.get("/api/signals")
 async def api_signals(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    asset: str | None = Query(None),
     _: None = Depends(require_read),
 ) -> dict:
     db = _get_state().db
-    return _paginated(db.recent_signals(limit, offset), limit, offset, db.count_signals())
+    key = _asset_key(asset)
+    return _paginated(
+        db.recent_signals(limit, offset, key),
+        limit,
+        offset,
+        db.count_signals(key),
+    )
 
 
 @app.get("/api/orders")
 async def api_orders(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    asset: str | None = Query(None),
     _: None = Depends(require_read),
 ) -> dict:
     db = _get_state().db
-    return _paginated(db.recent_orders(limit, offset), limit, offset, db.count_orders())
+    key = _asset_key(asset)
+    return _paginated(
+        db.recent_orders(limit, offset, key),
+        limit,
+        offset,
+        db.count_orders(key),
+    )
 
 
 @app.get("/api/fills")
 async def api_fills(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    asset: str | None = Query(None),
     _: None = Depends(require_read),
 ) -> dict:
     db = _get_state().db
-    return _paginated(db.recent_fills(limit, offset), limit, offset, db.count_fills())
+    key = _asset_key(asset)
+    return _paginated(
+        db.recent_fills(limit, offset, key),
+        limit,
+        offset,
+        db.count_fills(key),
+    )
 
 
 @app.get("/api/positions")
 async def api_positions(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    asset: str | None = Query(None),
     _: None = Depends(require_read),
 ) -> dict:
     db = _get_state().db
+    key = _asset_key(asset)
     return _paginated(
-        db.recent_positions(limit, offset), limit, offset, db.count_positions()
+        db.recent_positions(limit, offset, key),
+        limit,
+        offset,
+        db.count_positions(key),
     )
 
 
 @app.get("/api/pnl")
 async def api_pnl(
-    days: int = Query(7, ge=1, le=90), _: None = Depends(require_read)
+    days: int = Query(7, ge=1, le=90),
+    asset: str | None = Query(None),
+    _: None = Depends(require_read),
 ) -> dict:
     state = _get_state()
+    key = _asset_key(asset)
     return {
-        "summary": _clean(state.db.summary()),
-        "by_day": _clean(state.db.pnl_by_day(days)),
+        "summary": _clean(state.db.summary(key)),
+        "by_day": _clean(state.db.pnl_by_day(days, key)),
     }
+
+
+@app.get("/api/maker-shadow")
+async def api_maker_shadow(
+    days: int = Query(14, ge=1, le=90),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _: None = Depends(require_read),
+) -> dict:
+    db = _get_state().db
+    rows = db.maker_shadow_rows(days)
+    summary, by_asset = summarize_shadow(rows)
+    total = db.count_maker_shadow(days)
+    payload = _paginated(
+        db.recent_maker_shadow(limit, offset, days), limit, offset, total
+    )
+    payload.update(
+        {
+            "days": int(days),
+            "summary": _clean(summary),
+            "by_asset": _clean(by_asset),
+        }
+    )
+    return payload
 
 
 # ---------------------------------------------------------------------------
 # Config + control APIs (always require a login)
 # ---------------------------------------------------------------------------
+def _asset_key(asset: str | None) -> str | None:
+    value = str(asset or "").strip().upper()
+    return value or None
+
+
 @app.get("/api/config")
-async def api_get_config(_: None = Depends(require_login)) -> dict:
+async def api_get_config(
+    asset: str | None = Query(None), _: None = Depends(require_login)
+) -> dict:
     state = _get_state()
+    key = _asset_key(asset)
+    params = state.runtime.params_for(key) if key else state.runtime.params
     return {
-        "params": state.runtime.params.model_dump(),
+        "params": params.model_dump(),
+        "global_params": state.runtime.params.model_dump(),
+        "assets": state.settings.assets_list,
+        "asset": key or "",
+        "overridden": bool(key and state.runtime.has_override(key)),
         "mode": state.router.mode,
     }
 
@@ -365,19 +449,38 @@ async def api_put_config(
     payload: dict[str, Any], _: None = Depends(require_login)
 ) -> dict:
     state = _get_state()
+    key = _asset_key(payload.get("asset"))
+    patch = payload.get("params")
+    if not isinstance(patch, dict):
+        # Backward compatibility: old clients sent a flat patch (global only).
+        patch = {k: v for k, v in payload.items() if k != "asset"}
     try:
-        params = state.runtime.update(payload)
+        params = state.runtime.update(patch, asset=key)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=_validation_errors(exc)) from exc
-    log.info("web.config_updated", patch=list(payload.keys()))
-    return {"ok": True, "params": params.model_dump()}
+    log.info("web.config_updated", asset=key or "GLOBAL", patch=list(patch.keys()))
+    return {
+        "ok": True,
+        "params": params.model_dump(),
+        "asset": key or "",
+        "overridden": bool(key and state.runtime.has_override(key)),
+    }
 
 
 @app.post("/api/config/reset")
-async def api_reset_config(_: None = Depends(require_login)) -> dict:
-    params = _get_state().runtime.reset()
-    log.info("web.config_reset")
-    return {"ok": True, "params": params.model_dump()}
+async def api_reset_config(
+    payload: dict[str, Any] | None = None, _: None = Depends(require_login)
+) -> dict:
+    state = _get_state()
+    key = _asset_key((payload or {}).get("asset"))
+    params = state.runtime.reset(key)
+    log.info("web.config_reset", asset=key or "GLOBAL")
+    return {
+        "ok": True,
+        "params": params.model_dump(),
+        "asset": key or "",
+        "overridden": bool(key and state.runtime.has_override(key)),
+    }
 
 
 @app.get("/api/config/schema")

@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Optional
+from collections import deque
+from typing import Any, Optional
 
 import websockets
 
@@ -33,6 +34,10 @@ class ClobWsFeed:
         self.reconnect_max_s = float(reconnect_max_s)
         self.books: dict[str, OrderBook] = {}
         self.last_trade: dict[str, tuple[float, float, float]] = {}
+        # Every last_trade_price event since the last drain. The maker shadow
+        # needs the full print stream (side/price/size) to simulate queue fills;
+        # `last_trade` alone is not enough.
+        self.trade_events: deque[dict[str, Any]] = deque(maxlen=50000)
         self._tokens: dict[str, list[str]] = {a: [] for a in self.assets}
         self._version = 0
         self._running = False
@@ -54,6 +59,14 @@ class ClobWsFeed:
 
     def book(self, token_id: str) -> Optional[OrderBook]:
         return self.books.get(str(token_id))
+
+    def drain_trades(self) -> list[dict[str, Any]]:
+        """Return and clear the trade prints received since the last call."""
+        if not self.trade_events:
+            return []
+        events = list(self.trade_events)
+        self.trade_events.clear()
+        return events
 
     def start(self) -> None:
         self._running = True
@@ -165,4 +178,22 @@ class ClobWsFeed:
             size = float(item.get("size") or 0.0)
         except (TypeError, ValueError):
             return
-        self.last_trade[token] = (price, size, time.time())
+        now = time.time()
+        self.last_trade[token] = (price, size, now)
+        exchange_ts: Optional[float] = None
+        try:
+            raw_ts = item.get("timestamp")
+            if raw_ts is not None:
+                exchange_ts = float(raw_ts) / 1000.0
+        except (TypeError, ValueError):
+            exchange_ts = None
+        self.trade_events.append(
+            {
+                "token_id": token,
+                "side": str(item.get("side") or "").upper(),
+                "price": price,
+                "size": size,
+                "ts": now,
+                "exchange_ts": exchange_ts,
+            }
+        )
