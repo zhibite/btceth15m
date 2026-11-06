@@ -1,3 +1,4 @@
+:root { color-scheme: dark; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a14; color: #e0e0e0; }
 nav { background: #12122a; border-bottom: 1px solid #1e1e3a; padding: 0 24px; display: flex; align-items: center; gap: 8px; height: 56px; }
@@ -344,31 +345,127 @@ dialog.modal[open] { animation: modal-in .18s ease-out; }
 
 /* ── Per-asset config table ──────────────────────────────────────────── */
 .section-title { font-size: 15px; font-weight: 600; color: #d1d5db; margin: 6px 0 12px; }
-.config-table { min-width: 980px; }
-.config-table th { padding: 8px 7px; white-space: nowrap; }
-.config-table td { padding: 7px; border-bottom: 1px solid #171730; }
-.config-table tr.asset-off td { opacity: .55; }
-.config-table .asset-name { font-weight: 700; color: #e0e0e0; white-space: nowrap; }
-.config-table .asset-name .config-help { margin-top: 2px; font-weight: 400; }
+.config-page { max-width: 1440px; }
+.config-table-wrap {
+  background: #0d0d1b;
+  border: 1px solid #1e1e3a;
+  border-radius: 10px;
+}
+.config-table { width: 100%; min-width: 1068px; table-layout: fixed; }
+.config-table col.c-asset { width: 126px; }
+.config-table col.c-enabled { width: 54px; }
+.config-table col.c-mode { width: 120px; }
+.config-table col.c-param { width: 88px; }
+.config-table col.c-action { width: 64px; }
+.config-table th {
+  padding: 10px 8px 9px;
+  white-space: nowrap;
+  vertical-align: bottom;
+  border-bottom: 1px solid #242440;
+  text-transform: none;
+  letter-spacing: .02em;
+}
+.config-table th:nth-child(2),
+.config-table th:nth-child(n+4):nth-child(-n+11),
+.config-table th:last-child { text-align: center; }
+.config-table th .th-unit {
+  display: block;
+  margin-top: 2px;
+  font-size: 9px;
+  font-weight: 500;
+  color: #4b5563;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.config-table td { padding: 8px; border-bottom: 1px solid #171730; vertical-align: middle; }
+.config-table tbody tr { transition: background .12s ease; }
+.config-table tbody tr:hover { background: rgba(124, 58, 237, .06); }
+.config-table tbody tr.asset-off { background: rgba(255, 255, 255, .015); }
+.config-table tbody tr.asset-off td { opacity: .55; }
+.config-table tbody tr.asset-off:hover td { opacity: .8; }
+.config-table th:first-child,
+.config-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #12122a;
+  border-right: 1px solid #1e1e3a;
+}
+.config-table tbody tr:hover td:first-child { background: #171331; }
+.config-table .asset-name { white-space: nowrap; }
+.asset-code { display: block; font-size: 13px; font-weight: 700; color: #e5e7eb; }
+.asset-source {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.55;
+  font-weight: 500;
+  background: #1e1e3a;
+  color: #8b8b9e;
+}
+.asset-source.override { background: rgba(124, 58, 237, .18); color: #c4b5fd; }
+.asset-source.asset_default { background: rgba(59, 130, 246, .15); color: #93c5fd; }
+.asset-source.global { background: #1e1e3a; color: #8b8b9e; }
+.asset-warn { margin-left: 4px; color: #fbbf24; font-size: 11px; cursor: help; }
 .config-table .config-center { text-align: center; }
-.config-num {
-  width: 82px; background: #0a0a14; border: 1px solid #2a2a4a; color: #e0e0e0;
-  border-radius: 6px; padding: 6px 7px; font-size: 13px;
+.config-table .config-num-cell { text-align: center; }
+.config-table input.config-num {
+  width: 100%;
+  max-width: 80px;
+  height: 30px;
+  padding: 4px 6px;
+  text-align: center;
+  background-color: #0a0a14 !important;
+  color: #e5e7eb !important;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
+  color-scheme: dark;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
 }
-.config-num:focus { outline: none; border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124,58,237,.16); }
-.config-num-cell.overridden .config-num { border-color: #6d28d9; background: #15102a; }
-.config-check { width: 16px; height: 16px; accent-color: #7c3aed; }
-.config-select {
-  background: #0a0a18; color: #e5e7eb; border: 1px solid #2a2a50;
-  border-radius: 6px; padding: 6px 7px; font-size: 12px; outline: none;
+.config-table input.config-num:focus {
+  outline: none;
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, .16);
 }
-.config-select:focus { border-color: #6366f1; }
-.config-select option:disabled { color: #4b5563; }
+.config-table input.config-num.dirty {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 2px rgba(168, 85, 247, .2);
+}
+.config-num-cell.overridden input.config-num {
+  border-color: #6d28d9;
+  background-color: #130f26 !important;
+  color: #ddd6fe !important;
+}
+.config-table input.config-num:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px #0a0a14 inset;
+  -webkit-text-fill-color: #e5e7eb;
+}
+.config-table .config-check { width: 17px; height: 17px; accent-color: #7c3aed; }
+.config-table .config-select {
+  width: 100%;
+  max-width: 104px;
+  height: 30px;
+  padding: 4px 6px;
+  background-color: #0a0a14 !important;
+  color: #e5e7eb !important;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+  color-scheme: dark;
+}
+.config-table .config-select:focus { border-color: #6366f1; }
+.config-table .config-select option:disabled { color: #4b5563; }
+.config-table .btn-sm { padding: 4px 8px; font-size: 11px; }
 .badge.disabled { background: #2a2a4a; color: #6b7280; }
 .disabled-card { border-style: dashed; }
 .disabled-card .price-title { color: #9ca3af; }
 
 @media (max-width: 760px) {
-  .config-table { min-width: 900px; }
+  .config-page { padding: 14px; }
+  .config-table { min-width: 1068px; }
 }

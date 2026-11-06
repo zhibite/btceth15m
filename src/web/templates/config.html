@@ -21,7 +21,7 @@
   </div>
 </nav>
 
-<div class="container">
+<div class="container config-page">
   <div class="page-head">
     <div>
       <h1>策略配置</h1>
@@ -37,8 +37,16 @@
 
   <div class="config-group">
     <h2><span class="dot"></span>币种列表<span class="count" id="asset-count">0 个币种</span></h2>
-    <div class="table-wrap">
+    <div class="table-wrap config-table-wrap">
       <table class="config-table">
+        <colgroup>
+          <col class="c-asset">
+          <col class="c-enabled">
+          <col class="c-mode">
+          <col class="c-param"><col class="c-param"><col class="c-param"><col class="c-param">
+          <col class="c-param"><col class="c-param"><col class="c-param"><col class="c-param">
+          <col class="c-action">
+        </colgroup>
         <thead>
           <tr>
             <th>币种</th>
@@ -46,13 +54,13 @@
             <th>模式</th>
             <th>最小 Edge</th>
             <th>模型缓冲</th>
-            <th>最大仓位</th>
-            <th>最早入场</th>
-            <th>最晚入场</th>
+            <th>最大仓位<span class="th-unit">USDC</span></th>
+            <th>最早入场<span class="th-unit">秒</span></th>
+            <th>最晚入场<span class="th-unit">秒</span></th>
             <th>最小 Fair</th>
             <th>最小入场价</th>
-            <th>日损失上限</th>
-            <th></th>
+            <th>日损失上限<span class="th-unit">USDC</span></th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody id="asset-tbody"><tr><td colspan="12" class="no-data">加载中...</td></tr></tbody>

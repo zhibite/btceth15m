@@ -87,32 +87,41 @@ function formatDetail(detail) {
 
 /* ── Asset table ──────────────────────────────────────────────────────── */
 function sourceLabel(row) {
-  const source = row.source;
-  let text = source === "override"
+  return row.source === "override"
     ? "已覆盖"
-    : source === "asset_default"
+    : row.source === "asset_default"
       ? "币种默认"
       : "继承全局";
+}
+
+function sourceClass(row) {
+  return row.source === "override"
+    ? "override"
+    : row.source === "asset_default"
+      ? "asset_default"
+      : "global";
+}
+
+function sourceTitle(row) {
   if (row.mode === "live" && row.effective_mode !== "live") {
-    text += " · 实盘不可用，按纸盘";
+    return "实盘不可用，当前按纸盘运行";
   }
-  return text;
+  return "参数来源：" + sourceLabel(row);
 }
 
 function modeSelect(row) {
   const live = DATA.live || {};
-  const options = [
-    ["inherit", `跟随全局（${modeLabel(DATA.global_mode)}）`],
-    ["paper", "纸盘"],
-    ["live", "实盘"],
-  ];
+  const labels = { inherit: "跟随全局", paper: "纸盘", live: "实盘" };
+  const titles = {
+    inherit: `使用全局默认模式（当前${modeLabel(DATA.global_mode)}）`,
+    paper: "该币种只做纸盘",
+    live: live.available ? "该币种真实下单" : `实盘不可用：${live.reason || ""}`,
+  };
+  const options = ["inherit", "paper", "live"];
   return `<select data-role="mode" class="config-select">
-    ${options.map(([value, label]) => {
+    ${options.map((value) => {
       const disabled = value === "live" && !live.available ? " disabled" : "";
-      const title = disabled
-        ? ` title="实盘不可用：${esc(live.reason || "")}"`
-        : "";
-      return `<option value="${value}"${row.mode === value ? " selected" : ""}${disabled}${title}>${esc(label)}</option>`;
+      return `<option value="${value}" title="${esc(titles[value] || "")}"${row.mode === value ? " selected" : ""}${disabled}>${esc(labels[value])}</option>`;
     }).join("")}
   </select>`;
 }
@@ -122,7 +131,8 @@ function keyCell(row, field) {
   const overridden = (row.override_fields || []).includes(field.key);
   return `<td class="config-num-cell${overridden ? " overridden" : ""}">
     <input type="number" class="config-num" data-key="${esc(field.key)}"
-      step="${esc(field.step)}" value="${esc(value)}" title="${esc(field.title || "")}">
+      step="${esc(field.step)}" value="${esc(value)}" title="${esc(field.title || "")}"
+      autocomplete="off" spellcheck="false" inputmode="decimal">
   </td>`;
 }
 
@@ -142,10 +152,13 @@ function renderAssetTable() {
       inherited: Object.assign({}, row.inherited),
       override_fields: (row.override_fields || []).slice(),
     };
+    const warn = row.mode === "live" && row.effective_mode !== "live"
+      ? '<span class="asset-warn" title="实盘不可用，当前按纸盘运行">!</span>'
+      : "";
     return `<tr data-asset="${esc(row.asset)}" class="${row.enabled ? "" : "asset-off"}">
       <td class="asset-name">
-        <div>${esc(row.asset)}</div>
-        <div class="config-help">${esc(sourceLabel(row))}</div>
+        <span class="asset-code">${esc(row.asset)}</span>
+        <span class="asset-source ${sourceClass(row)}" title="${esc(sourceTitle(row))}">${esc(sourceLabel(row))}</span>${warn}
       </td>
       <td class="config-center">
         <input type="checkbox" data-role="enabled" class="config-check"${row.enabled ? " checked" : ""}>
@@ -281,9 +294,23 @@ function updateSaveState() {
     : "没有待保存的修改";
 }
 
+function inputDirty(el) {
+  const tr = el.closest("tr[data-asset]");
+  const init = tr && INITIAL.assets[tr.dataset.asset];
+  if (!init) return false;
+  const raw = el.value.trim();
+  if (raw === "") return init.override_fields.includes(el.dataset.key);
+  const value = Number(raw);
+  return Number.isFinite(value) &&
+    Math.abs(value - Number(init.params[el.dataset.key])) > 1e-9;
+}
+
 function bindInputs() {
   document.querySelectorAll("#asset-tbody [data-role], #asset-tbody [data-key]").forEach((el) => {
-    el.addEventListener("input", updateSaveState);
+    el.addEventListener("input", () => {
+      if (el.matches("input[data-key]")) el.classList.toggle("dirty", inputDirty(el));
+      updateSaveState();
+    });
     el.addEventListener("change", updateSaveState);
   });
   document.querySelectorAll("#groups [data-common]").forEach((el) => {
