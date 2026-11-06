@@ -35,6 +35,21 @@ SESSION_TTL_S = 604800
 PAPER_TRADING = true
 LIVE_ENABLED = false
 
+[RECORDING]
+# Live book/trade recorder for offline replay.  It taps the existing feeds, so
+# it opens no extra WebSocket connections and sees exactly what the strategy
+# sees.  Hourly gzipped JSONL under data/recordings.
+# Estimate (7 assets, 1 Hz, top 10, no raw CLOB): ~60-100 MB/day compressed.
+ENABLED = true
+DIR = "data/recordings"
+SNAPSHOT_HZ = 1.0
+TOP_LEVELS = 10
+# Raw CLOB messages are much larger (~5-20x).  Enable only for short,
+# high-fidelity runs; the 1 Hz snapshots + trades are enough for edge analysis.
+RAW_CLOB = false
+RETENTION_DAYS = 30
+MIN_FREE_GB = 2.0
+
 [STRATEGY]
 # Entry requires: fair - executable_ask - fee >= MIN_EDGE + MODEL_BUFFER
 MIN_EDGE = 0.05

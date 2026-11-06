@@ -25,6 +25,7 @@ from src.infra.logging import configure_logging, get_logger
 from src.market.gamma import GammaClient
 from src.market.window_manager import WindowManager
 from src.persistence.db import Database
+from src.recording import Recorder
 from src.strategy.engine import StrategyEngine
 from src.strategy.risk import KillSwitch, RiskManager
 from src.web.app import app as web_app
@@ -49,6 +50,7 @@ class AppState:
     router: BrokerRouter
     engine: StrategyEngine
     latency: LatencyTracker
+    recorder: Recorder
     started_at: float
 
 
@@ -132,6 +134,10 @@ async def main() -> None:
         reconnect_base_s=settings.reconnect_base_s,
         reconnect_max_s=settings.reconnect_max_s,
     )
+    recorder = Recorder(settings, windows=windows, rtds=rtds, books=books)
+    rtds.on_event = recorder.on_rtds
+    books.on_event = recorder.on_clob_event
+    books.on_trade = recorder.on_trade
     paper = PaperBroker(db, runtime)
     live = LiveBroker(settings, db, runtime)
     router = BrokerRouter(settings, paper, live, runtime)
@@ -165,6 +171,7 @@ async def main() -> None:
         router=router,
         engine=engine,
         latency=latency,
+        recorder=recorder,
         started_at=time.time(),
     )
 
@@ -177,6 +184,8 @@ async def main() -> None:
         live_available=live.available,
         db=str(settings.db_path),
         web=f"{settings.web_host}:{settings.web_port}",
+        recording=settings.recording_enabled,
+        recording_dir=str(recorder.dir),
         params=runtime.params.model_dump(),
     )
     if settings.live_enabled and not live.available:
@@ -186,6 +195,7 @@ async def main() -> None:
             note="assets set to live will run as paper",
         )
 
+    recorder.start()
     rtds.start()
     books.start()
     engine.start()
@@ -211,6 +221,7 @@ async def main() -> None:
     finally:
         log.info("shutdown.begin")
         await engine.stop()
+        await recorder.stop()
         await windows.stop()
         await books.stop()
         await rtds.stop()

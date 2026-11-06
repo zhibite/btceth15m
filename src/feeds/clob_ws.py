@@ -26,9 +26,15 @@ class ClobWsFeed:
         url: str,
         reconnect_base_s: float = 1.0,
         reconnect_max_s: float = 30.0,
+        on_event=None,
+        on_trade=None,
     ) -> None:
         self.assets = [a.upper() for a in assets]
         self.url = url
+        # Optional recording hooks.  Both are called from the event loop and
+        # must be non-blocking: the recorder only enqueues a dict.
+        self.on_event = on_event
+        self.on_trade = on_trade
         self.reconnect_base_s = float(reconnect_base_s)
         self.reconnect_max_s = float(reconnect_max_s)
         self.books: dict[str, OrderBook] = {}
@@ -134,6 +140,11 @@ class ClobWsFeed:
         except (TypeError, ValueError):
             return
         self.last_msg_ts = time.time()
+        if self.on_event is not None:
+            try:
+                self.on_event(data, self.last_msg_ts)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("clob.hook_failed", error=repr(exc))
         items = data if isinstance(data, list) else [data]
         for item in items:
             if not isinstance(item, dict):
@@ -181,4 +192,14 @@ class ClobWsFeed:
             size = float(item.get("size") or 0.0)
         except (TypeError, ValueError):
             return
-        self.last_trade[token] = (price, size, time.time())
+        recv_ts = self.last_msg_ts or time.time()
+        self.last_trade[token] = (price, size, recv_ts)
+        if self.on_trade is not None:
+            try:
+                exchange_ts = float(item.get("timestamp")) / 1000.0
+            except (TypeError, ValueError):
+                exchange_ts = None
+            try:
+                self.on_trade(token, price, size, exchange_ts, recv_ts)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("clob.trade_hook_failed", error=repr(exc))

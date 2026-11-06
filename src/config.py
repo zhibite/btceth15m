@@ -117,6 +117,16 @@ class AppSettings(BaseSettings):
     data_dir: str = str(ROOT / "data")
     log_level: str = "INFO"
 
+    # Live recording for offline book replay.  The recorder taps the existing
+    # feeds; it does not open extra WebSocket connections.
+    recording_enabled: bool = False
+    recording_dir: str = ""
+    recording_snapshot_hz: float = 1.0
+    recording_top_levels: int = 10
+    recording_raw_clob: bool = False
+    recording_retention_days: int = 30
+    recording_min_free_gb: float = 2.0
+
     # Live CLOB credentials (never exposed by the API).
     api_key: str = ""
     api_secret: str = ""
@@ -153,6 +163,14 @@ class AppSettings(BaseSettings):
     @property
     def log_dir(self) -> Path:
         return Path(self.data_dir) / "logs"
+
+    @property
+    def recording_path(self) -> Path:
+        return (
+            Path(self.recording_dir)
+            if self.recording_dir
+            else Path(self.data_dir) / "recordings"
+        )
 
 
 class StrategyParams(BaseModel):
@@ -213,11 +231,12 @@ class AssetConfig(BaseModel):
 
 
 def _toml_settings() -> dict[str, Any]:
-    g, f, w, e = (
+    g, f, w, e, r = (
         _section("GENERAL"),
         _section("FEED"),
         _section("WEB"),
         _section("EXECUTION"),
+        _section("RECORDING"),
     )
     raw_interval = g.get("MARKET_INTERVAL")
     raw_window = g.get("WINDOW_SEC")
@@ -226,6 +245,9 @@ def _toml_settings() -> dict[str, Any]:
         raw_interval = interval_label(int(raw_window)) if raw_window else "15m"
     if raw_window is None:
         raw_window = interval_seconds(str(raw_interval))
+    raw_recording_dir = str(r.get("DIR", "") or "")
+    if raw_recording_dir and not Path(raw_recording_dir).is_absolute():
+        raw_recording_dir = str(ROOT / raw_recording_dir)
     return {
         "assets": g.get("ASSETS", "BTC,ETH,BNB,SOL,XRP,DOGE,HYPE"),
         "market_interval": str(raw_interval),
@@ -249,6 +271,13 @@ def _toml_settings() -> dict[str, Any]:
         "paper_trading": e.get("PAPER_TRADING", True),
         "live_enabled": e.get("LIVE_ENABLED", False),
         "data_dir": str(ROOT / "data"),
+        "recording_enabled": r.get("ENABLED", False),
+        "recording_dir": raw_recording_dir,
+        "recording_snapshot_hz": r.get("SNAPSHOT_HZ", 1.0),
+        "recording_top_levels": r.get("TOP_LEVELS", 10),
+        "recording_raw_clob": r.get("RAW_CLOB", False),
+        "recording_retention_days": r.get("RETENTION_DAYS", 30),
+        "recording_min_free_gb": r.get("MIN_FREE_GB", 2.0),
     }
 
 

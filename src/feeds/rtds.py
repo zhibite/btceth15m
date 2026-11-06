@@ -130,10 +130,14 @@ class RtdsFeed:
         reconnect_base_s: float = 1.0,
         reconnect_max_s: float = 30.0,
         latency=None,
+        on_event=None,
     ) -> None:
         self.assets = [a.upper() for a in assets]
         self.url = url
         self.latency = latency
+        # Optional recording hook: (asset, raw_message, recv_ts).  Called for
+        # every valid message; must be non-blocking.
+        self.on_event = on_event
         self.reconnect_base_s = float(reconnect_base_s)
         self.reconnect_max_s = float(reconnect_max_s)
         self.buffers = {a: PriceBuffer(buffer_s) for a in self.assets}
@@ -233,6 +237,11 @@ class RtdsFeed:
         if not isinstance(payload, dict):
             return
         recv_ts = float(recv_ts if recv_ts is not None else time.time())
+        if self.on_event is not None:
+            try:
+                self.on_event(asset, data, recv_ts)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("rtds.hook_failed", asset=asset, error=repr(exc))
         buf = self.buffers[asset]
         if "data" in payload:
             for item in payload.get("data") or []:
