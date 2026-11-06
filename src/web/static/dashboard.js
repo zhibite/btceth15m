@@ -1,7 +1,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const DEFAULT_ASSETS = ["BTC", "ETH"];
+const DEFAULT_ASSETS = ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "HYPE"];
 // Updated from /api/status so the UI follows MARKET_INTERVAL.
 let MARKET_INTERVAL = "15m";
 const PAGERS = {
@@ -36,6 +36,12 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 function outcomePill(outcome) {
   if (outcome !== "UP" && outcome !== "DOWN") return "--";
   return `<span class="pill ${outcome === "UP" ? "buy" : "sell"}">${outcome}</span>`;
+}
+
+function modePill(mode) {
+  return String(mode || "paper") === "live"
+    ? '<span class="pill sell">实盘</span>'
+    : '<span class="pill idle">纸盘</span>';
 }
 
 function timeStr(sec) {
@@ -89,10 +95,14 @@ function statusLabel(raw) {
     const names = { fair: "Fair 过低", price: "入场价过低" };
     return "已过滤 " + gates.map((g) => names[g] || g).join(" · ");
   }
+  if (s === "disabled") return "已停用";
+  if (s.startsWith("cooldown")) return "冷却中 " + s.slice(9);
   if (s === "killswitch") return "已停止";
   if (s === "daily_loss_limit") return "触发日损失限制";
   if (s === "fill_rejected") return "成交被拒";
-  if (s.startsWith("execution_error")) return "执行错误";
+  if (s.startsWith("execution_error")) {
+    return "执行错误 " + s.slice("execution_error".length).replace(/^:\s*/, "").slice(0, 60);
+  }
   if (s === "window_discovered") return "新窗口";
   return s || "等待";
 }
@@ -100,12 +110,14 @@ function statusLabel(raw) {
 function statusClass(raw) {
   const s = String(raw || "");
   if (s.startsWith("entered") || s === "in_position") return "pass";
+  if (s === "disabled") return "disabled";
   if (s.includes("killswitch") || s.includes("daily_loss") || s.startsWith("execution_error")) return "fail";
   if (
     s.startsWith("warming") || s === "waiting_p0" || s === "stale_feed" ||
     s === "no_book" || s === "one_sided_book" || s === "stale_book" ||
     s.startsWith("thin_best") || s.startsWith("wide_spread") ||
-    s.startsWith("early") || s.startsWith("late") || s.startsWith("filtered")
+    s.startsWith("early") || s.startsWith("late") || s.startsWith("filtered") ||
+    s.startsWith("cooldown")
   ) return "pending";
   return "past_t1";
 }
@@ -152,6 +164,22 @@ function setStat(id, value, extraClass) {
   el.className = "stat-value " + (extraClass || pnlClass(value));
 }
 
+function modeSummary(status) {
+  const modes = status.modes || {};
+  const live = modes.live_assets || [];
+  const paper = modes.paper_assets || [];
+  if (!live.length && !paper.length) return "全部币种已停用";
+  if (!live.length) return "纸盘";
+  if (!paper.length) return "实盘";
+  return "混合（实盘 " + live.join("/") + "）";
+}
+
+function enabledAssetNames(status) {
+  return Array.isArray(status.enabled_assets) && status.enabled_assets.length
+    ? status.enabled_assets
+    : (status.configured_assets || DEFAULT_ASSETS);
+}
+
 function renderSummary(status) {
   const today = status.summary?.today || {};
   const total = status.summary?.total || {};
@@ -166,10 +194,16 @@ function renderSummary(status) {
   $("win-rate").textContent = n ? pct(wins / n) : "--";
   $("win-sub").textContent = wins + " 胜 / " + losses + " 负";
 
-  const times = Object.values(status.assets || {})
-    .map((a) => Number(a && a.time_left))
+  const states = status.asset_states || {};
+  const times = Object.entries(status.assets || {})
+    .filter(([asset]) => !states[asset] || states[asset].enabled !== false)
+    .map(([, a]) => Number(a && a.time_left))
     .filter((x) => Number.isFinite(x));
   $("window-remain").textContent = timeStr(times.length ? Math.max(0, ...times) : 0);
+  const enabled = enabledAssetNames(status);
+  $("window-sub").textContent = enabled.length
+    ? enabled.length + " 个已开启币种 · " + MARKET_INTERVAL + " 窗口"
+    : "全部币种已停用";
 
   const active = Boolean(status.killswitch?.active);
   $("control-bar").classList.toggle("stopped", active);
@@ -177,13 +211,21 @@ function renderSummary(status) {
   $("control-label").textContent = active ? "策略已停止" : "策略运行中";
   $("control-meta").textContent = active
     ? (status.killswitch?.reason || "手动停止")
-    : "纸盘 · 自动扫描 BTC/ETH " + MARKET_INTERVAL + " 窗口";
+    : enabled.length
+      ? modeSummary(status) + " · 自动扫描 " + enabled.join("/") + " " + MARKET_INTERVAL + " 窗口"
+      : "全部币种已停用 · 可在策略配置中开启";
   $("stop-btn").hidden = active;
   $("start-btn").hidden = !active;
 
   const feeds = status.feeds || {};
   const rtds = feeds.rtds || {};
-  const rtdsOk = Object.keys(rtds).length > 0 && Object.values(rtds).every((x) => x && x.connected);
+  const enabledSet = Array.isArray(status.enabled_assets) && status.enabled_assets.length
+    ? new Set(status.enabled_assets)
+    : null;
+  const entries = Object.entries(rtds).filter(
+    ([asset]) => !enabledSet || enabledSet.has(asset)
+  );
+  const rtdsOk = entries.length > 0 && entries.every(([, x]) => x && x.connected);
   const ok = rtdsOk && Boolean(feeds.clob?.connected);
   $("live-dot").className = "live-dot" + (ok ? "" : " offline");
   $("live-label").textContent = ok ? "在线" : "离线";
@@ -208,6 +250,20 @@ function fairDetail(detail) {
 }
 
 function assetCard(asset, data) {
+  if (data && (data.enabled === false || data.status === "disabled")) {
+    const w = data.window;
+    const timeLeft = w ? Number(w.end_ts) - Date.now() / 1000 : null;
+    return `<div class="price-card disabled-card">
+      <div class="price-head">
+        <div class="price-title">${esc(asset)} ${modePill(data.mode)}</div>
+        <span class="badge disabled">已停用</span>
+      </div>
+      <div class="no-data">
+        该币种已关闭交易，不会产生新入场。
+        ${w ? `当前窗口剩余 ${timeStr(timeLeft)} · 开盘基准 ${fmt(w.price_to_beat, 2)}` : ""}
+      </div>
+    </div>`;
+  }
   if (!data || !data.window) {
     return `<div class="price-card">
       <div class="price-head">
@@ -275,7 +331,7 @@ function assetCard(asset, data) {
   return `<div class="price-card">
     <div class="price-head">
       <div>
-        <div class="price-title">${esc(asset)} <span class="muted">${esc(w.slug || "")}</span></div>
+        <div class="price-title">${esc(asset)} ${modePill(data.mode)} <span class="muted">${esc(w.slug || "")}</span></div>
         <div class="muted" style="font-size:11px;margin-top:2px">开盘基准来源：${esc(p0SourceLabel(w.p0_source || data.p0_source))}</div>
       </div>
       <div class="text-right">
@@ -334,6 +390,7 @@ function renderAssets(assets, configured) {
 function renderPositions(positions) {
   const rows = (positions || []).map((p) => `<tr>
     <td>${esc(p.asset)}</td>
+    <td>${modePill(p.mode)}</td>
     <td class="mono">${utcTime(p.start_ts)}</td>
     <td><span class="pill ${p.side === "UP" ? "buy" : "sell"}">${esc(p.side)}</span></td>
     <td class="mono">${fmt(p.size, 2)}</td>
@@ -342,7 +399,7 @@ function renderPositions(positions) {
     <td class="mono">$${fmt(p.fees, 4)}</td>
     <td>${p.status === "open" ? "持仓中" : "已结算"}</td>
   </tr>`).join("");
-  $("positions-tbody").innerHTML = rows || '<tr><td colspan="8" class="no-data">无持仓</td></tr>';
+  $("positions-tbody").innerHTML = rows || '<tr><td colspan="9" class="no-data">无持仓</td></tr>';
   $("position-count").textContent = String((positions || []).length);
 }
 
@@ -365,6 +422,7 @@ function renderFills(fills) {
     return `<tr>
       <td class="mono">${utcTime(f.ts)}</td>
       <td>${esc(f.asset)}</td>
+      <td>${modePill(f.mode)}</td>
       <td><span class="pill ${f.side === "BUY" ? "buy" : "sell"}">${f.side === "BUY" ? "买入" : "卖出"}</span></td>
       <td>${outcomePill(f.position_side)}</td>
       <td class="mono">${fmt(f.price, 3)}</td>
@@ -375,7 +433,7 @@ function renderFills(fills) {
       <td class="mono">${pnl}</td>
     </tr>`;
   }).join("");
-  $("fills-tbody").innerHTML = rows || '<tr><td colspan="10" class="no-data">暂无成交</td></tr>';
+  $("fills-tbody").innerHTML = rows || '<tr><td colspan="11" class="no-data">暂无成交</td></tr>';
 }
 
 function renderSignals(signals) {
@@ -424,6 +482,9 @@ async function loadSignals() {
 let lastTables = 0;
 
 async function refresh() {
+  // A hidden tab does not need to poll; this also stops several open tabs
+  // from multiplying the 2s /api/status traffic.
+  if (document.hidden) return;
   try {
     const status = await getJSON("/api/status");
     if (status.market_interval) MARKET_INTERVAL = String(status.market_interval);

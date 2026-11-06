@@ -14,7 +14,7 @@ import re
 import tomllib
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -89,7 +89,7 @@ class AppSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=(str(ROOT / ".env"),), extra="ignore")
 
-    assets: str = "BTC,ETH"
+    assets: str = "BTC,ETH,BNB,SOL,XRP,DOGE,HYPE"
     # Market cadence: the slug tag is ``updown-{market_interval}`` and the
     # window duration must agree with it.
     market_interval: str = "15m"
@@ -186,13 +186,30 @@ class StrategyParams(BaseModel):
     engine_tick_s: float = Field(0.5, ge=0.1, le=60.0)
     signal_log_min_edge: float = Field(0.02, ge=0.0, le=1.0)
 
-    # Maker shadow: simulate a maker-first policy next to the real taker
-    # paper fill. It never changes the paper position or PnL; it only records
-    # the counterfactual for comparison.
-    maker_shadow_enabled: bool = True
-    maker_buffer: float = Field(0.01, ge=0.0, le=0.5)
-    maker_fallback_rel_s: int = Field(840, ge=0, le=900)
-    maker_chase_bid: bool = True
+
+# Key parameters editable per asset on the config page. Everything else is a
+# common/global parameter: a saved per-asset override only contains these
+# fields, so later global edits keep flowing into the other fields.
+ASSET_KEY_FIELDS: tuple[str, ...] = (
+    "min_edge",
+    "model_buffer",
+    "max_position_usd",
+    "entry_min_rel_s",
+    "entry_max_rel_s",
+    "min_fair",
+    "min_entry_price",
+    "daily_loss_limit_usd",
+)
+
+
+class AssetConfig(BaseModel):
+    """Runtime switch for one asset: trade on/off and paper/live mode."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    # inherit -> follow PAPER_TRADING; paper/live -> explicit per-asset mode.
+    mode: Literal["inherit", "paper", "live"] = "inherit"
 
 
 def _toml_settings() -> dict[str, Any]:
@@ -210,7 +227,7 @@ def _toml_settings() -> dict[str, Any]:
     if raw_window is None:
         raw_window = interval_seconds(str(raw_interval))
     return {
-        "assets": g.get("ASSETS", "BTC,ETH"),
+        "assets": g.get("ASSETS", "BTC,ETH,BNB,SOL,XRP,DOGE,HYPE"),
         "market_interval": str(raw_interval),
         "window_sec": raw_window,
         "twap_window_s": g.get("TWAP_WINDOW_S", 60),
@@ -271,9 +288,8 @@ def get_asset_strategy_defaults() -> dict[str, dict[str, Any]]:
     """Per-asset defaults from ``[STRATEGY.<ASSET>]`` tables in config.toml.
 
     The values are partial: fields that are not listed keep inheriting the
-    current global default (including edits made from the dashboard). This is
-    different from an ``asset_params`` override, which is a full snapshot
-    persisted in SQLite and independently editable from the config page.
+    current global default (including edits made from the dashboard). A
+    dashboard override is also partial and sits on top of these defaults.
     """
     raw = _table("STRATEGY")
     known = set(StrategyParams.model_fields)
@@ -302,12 +318,16 @@ class RuntimeConfig:
       * ``params`` — global defaults (config.toml / env / DB edit).
       * ``asset_defaults`` — partial ``[STRATEGY.<ASSET>]`` defaults from
         config.toml, merged over the *current* global params.
-      * ``asset_params`` — per-asset overrides persisted in SQLite (a full
-        snapshot saved from the config page).
+      * ``asset_overrides`` — partial per-asset overrides persisted in SQLite.
+        Only the fields the operator changed are stored, so unset fields keep
+        inheriting the current global value.
+
+    ``asset_states`` stores the per-asset on/off switch and paper/live mode.
     """
 
     KEY = "strategy_params"
     ASSET_KEY = "asset_strategy_params"
+    ASSET_STATE_KEY = "asset_state"
 
     def __init__(
         self,
@@ -325,19 +345,42 @@ class RuntimeConfig:
                 else get_asset_strategy_defaults()
             ).items()
         }
-        self._effective: dict[str, tuple[StrategyParams, StrategyParams]] = {}
+        self._known = set(StrategyParams.model_fields)
+        self._effective: dict[str, tuple[int, StrategyParams]] = {}
+        self._version = 0
         self.params = self._load(self.KEY, self._defaults)
-        self.asset_params: dict[str, StrategyParams] = {}
+
+        # Partial overrides. Older builds stored a full snapshot here; the
+        # loader accepts both shapes, so existing databases keep working.
+        self.asset_overrides: dict[str, dict[str, Any]] = {}
         raw = db.get_setting(self.ASSET_KEY) if db is not None else None
         if raw:
             try:
                 data = json.loads(raw)
                 for asset, value in (data or {}).items():
-                    self.asset_params[str(asset).upper()] = StrategyParams.model_validate(
+                    if not isinstance(value, dict):
+                        continue
+                    clean = {
+                        str(name): item
+                        for name, item in value.items()
+                        if str(name) in self._known
+                    }
+                    if clean:
+                        self.asset_overrides[str(asset).upper()] = clean
+            except Exception:  # noqa: BLE001
+                self.asset_overrides = {}
+
+        self.asset_states: dict[str, AssetConfig] = {}
+        raw_state = db.get_setting(self.ASSET_STATE_KEY) if db is not None else None
+        if raw_state:
+            try:
+                data = json.loads(raw_state)
+                for asset, value in (data or {}).items():
+                    self.asset_states[str(asset).upper()] = AssetConfig.model_validate(
                         value
                     )
             except Exception:  # noqa: BLE001
-                self.asset_params = {}
+                self.asset_states = {}
 
     def _load(self, key: str, default: StrategyParams) -> StrategyParams:
         raw = self._db.get_setting(key) if self._db is not None else None
@@ -348,29 +391,57 @@ class RuntimeConfig:
                 pass
         return default
 
+    def _bump(self) -> None:
+        self._version += 1
+        self._effective.clear()
+
     def params_for(self, asset: str | None) -> StrategyParams:
         if not asset:
             return self.params
         key = str(asset).upper()
-        override = self.asset_params.get(key)
-        if override is not None:
-            return override
+        extra = self.asset_defaults.get(key) or {}
+        override = self.asset_overrides.get(key) or {}
+        if not extra and not override:
+            return self.params
+        cached = self._effective.get(key)
+        if cached is not None and cached[0] == self._version:
+            return cached[1]
+        merged = self.params.model_dump()
+        merged.update(extra)
+        merged.update(override)
+        params = StrategyParams.model_validate(merged)
+        self._effective[key] = (self._version, params)
+        return params
+
+    def inherited_params_for(self, asset: str | None) -> StrategyParams:
+        """Effective params without the SQLite per-asset override.
+
+        Used by the config page to show what an asset would use after
+        "reset", and to decide which key fields need an explicit override.
+        """
+        if not asset:
+            return self.params
+        key = str(asset).upper()
         extra = self.asset_defaults.get(key)
         if not extra:
             return self.params
-        # ``params`` is replaced (not mutated) on update/reset, so identity is
-        # a safe cache key for the merged result.
-        cached = self._effective.get(key)
-        if cached is not None and cached[0] is self.params:
+        cache_key = f"inherited:{key}"
+        cached = self._effective.get(cache_key)
+        if cached is not None and cached[0] == self._version:
             return cached[1]
         merged = self.params.model_dump()
         merged.update(extra)
         params = StrategyParams.model_validate(merged)
-        self._effective[key] = (self.params, params)
+        self._effective[cache_key] = (self._version, params)
         return params
 
     def has_override(self, asset: str | None) -> bool:
-        return bool(asset) and str(asset).upper() in self.asset_params
+        return bool(asset) and bool(self.asset_overrides.get(str(asset).upper()))
+
+    def override_fields_for(self, asset: str | None) -> list[str]:
+        if not asset:
+            return []
+        return sorted(self.asset_overrides.get(str(asset).upper(), {}))
 
     def source_for(self, asset: str | None) -> str:
         """Where the effective params for ``asset`` come from.
@@ -382,45 +453,129 @@ class RuntimeConfig:
         key = str(asset).upper() if asset else ""
         if not key:
             return "global"
-        if key in self.asset_params:
+        if self.has_override(key):
             return "override"
         if key in self.asset_defaults:
             return "asset_default"
         return "global"
 
-    def _save_assets(self) -> None:
+    # ── asset on/off + paper/live mode ────────────────────────────────────
+    def asset_state_for(self, asset: str) -> dict[str, Any]:
+        state = self.asset_states.get(str(asset).upper(), AssetConfig())
+        return state.model_dump()
+
+    def is_enabled(self, asset: str | None) -> bool:
+        if not asset:
+            return True
+        state = self.asset_states.get(str(asset).upper())
+        return True if state is None else state.enabled
+
+    def mode_for(self, asset: str | None) -> str:
+        if not asset:
+            return "inherit"
+        state = self.asset_states.get(str(asset).upper())
+        return "inherit" if state is None else state.mode
+
+    def enabled_assets(self, assets: list[str]) -> list[str]:
+        return [a for a in assets if self.is_enabled(a)]
+
+    def set_asset_state(
+        self,
+        asset: str,
+        *,
+        enabled: bool | None = None,
+        mode: str | None = None,
+    ) -> AssetConfig:
+        key = str(asset).upper()
+        data = self.asset_state_for(key)
+        if enabled is not None:
+            data["enabled"] = bool(enabled)
+        if mode is not None:
+            data["mode"] = mode
+        state = AssetConfig.model_validate(data)
+        self.asset_states[key] = state
+        self._save_states()
+        return state
+
+    def _save_states(self) -> None:
         if self._db is None:
             return
         payload = {
-            asset: params.model_dump() for asset, params in self.asset_params.items()
+            asset: state.model_dump() for asset, state in self.asset_states.items()
         }
-        self._db.set_setting(self.ASSET_KEY, json.dumps(payload))
+        self._db.set_setting(self.ASSET_STATE_KEY, json.dumps(payload))
+
+    # ── writes ────────────────────────────────────────────────────────────
+    def _save_assets(self) -> None:
+        if self._db is None:
+            return
+        self._db.set_setting(self.ASSET_KEY, json.dumps(self.asset_overrides))
 
     def update(
         self, patch: dict[str, Any], asset: str | None = None
     ) -> StrategyParams:
         key = str(asset).upper() if asset else None
-        merged = self.params_for(key).model_dump()
+        current = self.params_for(key).model_dump()
+        merged = dict(current)
         for name, value in patch.items():
-            if name in merged:
+            if name in self._known:
                 merged[name] = value
         params = StrategyParams.model_validate(merged)
         if key:
-            self.asset_params[key] = params
+            override = dict(self.asset_overrides.get(key, {}))
+            for name in patch:
+                if name in self._known:
+                    override[name] = getattr(params, name)
+            if override:
+                self.asset_overrides[key] = override
+            else:
+                self.asset_overrides.pop(key, None)
+            self._bump()
             self._save_assets()
         else:
             self.params = params
+            self._bump()
             if self._db is not None:
                 self._db.set_setting(self.KEY, params.model_dump_json())
         return params
 
+    def replace_key_overrides(
+        self, asset: str, patch: dict[str, Any]
+    ) -> StrategyParams:
+        """Replace the config-page key fields for one asset.
+
+        Fields absent from ``patch`` are removed from the override and fall
+        back to the asset default / global value. Non-key fields from legacy
+        full-snapshot overrides are preserved untouched.
+        """
+        key = str(asset).upper()
+        values = {
+            name: value for name, value in patch.items() if name in ASSET_KEY_FIELDS
+        }
+        current = self.params_for(key).model_dump()
+        params = StrategyParams.model_validate({**current, **values})
+        override = dict(self.asset_overrides.get(key, {}))
+        for name in ASSET_KEY_FIELDS:
+            override.pop(name, None)
+        for name in values:
+            override[name] = getattr(params, name)
+        if override:
+            self.asset_overrides[key] = override
+        else:
+            self.asset_overrides.pop(key, None)
+        self._bump()
+        self._save_assets()
+        return self.params_for(key)
+
     def reset(self, asset: str | None = None) -> StrategyParams:
         key = str(asset).upper() if asset else None
         if key:
-            self.asset_params.pop(key, None)
+            self.asset_overrides.pop(key, None)
+            self._bump()
             self._save_assets()
             return self.params_for(key)
         self.params = self._defaults
+        self._bump()
         if self._db is not None:
             self._db.set_setting(self.KEY, self.params.model_dump_json())
         return self.params

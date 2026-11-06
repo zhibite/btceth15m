@@ -3,9 +3,7 @@
 const $ = (id) => document.getElementById(id);
 const PAGERS = {
   windows: { limit: 20, offset: 0, total: 0 },
-  positions: { limit: 20, offset: 0, total: 0 },
   fills: { limit: 20, offset: 0, total: 0 },
-  signals: { limit: 20, offset: 0, total: 0 },
 };
 const initialAsset = new URLSearchParams(location.search).get("asset") || "";
 let ASSET = initialAsset.trim().toUpperCase(); // "" = 全部币种
@@ -90,6 +88,12 @@ function outcomePill(outcome) {
   return `<span class="pill ${outcome === "UP" ? "buy" : "sell"}">${outcome}</span>`;
 }
 
+function modePill(mode) {
+  return String(mode || "paper") === "live"
+    ? '<span class="pill sell">实盘</span>'
+    : '<span class="pill idle">纸盘</span>';
+}
+
 function setPnlStat(id, value) {
   const el = $(id);
   el.textContent = money(value);
@@ -124,27 +128,6 @@ function renderWindows(rows) {
   $("windows-tbody").innerHTML = html || '<tr><td colspan="6" class="no-data">暂无窗口</td></tr>';
 }
 
-function renderPositions(rows) {
-  const html = rows.map((p) => {
-    const pnl = p.status === "settled"
-      ? `<span class="${pnlClass(p.pnl)}">${money(p.pnl)}</span>`
-      : "--";
-    return `<tr>
-      <td class="mono">${utcTime(p.start_ts)}</td>
-      <td>${esc(p.asset)}</td>
-      <td>${outcomePill(p.side)}</td>
-      <td class="mono">${fmt(p.size, 2)}</td>
-      <td class="mono">${fmt(p.avg_price, 3)}</td>
-      <td class="mono">$${fmt(p.cost, 2)}</td>
-      <td class="mono">$${fmt(p.fees, 4)}</td>
-      <td>${outcomePill(p.outcome)}</td>
-      <td class="mono">${pnl}</td>
-      <td>${p.status === "settled" ? "已结算" : "持仓中"}</td>
-    </tr>`;
-  }).join("");
-  $("positions-tbody").innerHTML = html || '<tr><td colspan="10" class="no-data">暂无持仓</td></tr>';
-}
-
 function renderFills(rows) {
   const html = rows.map((f) => {
     const outcome = f.window_outcome || f.position_outcome;
@@ -164,6 +147,7 @@ function renderFills(rows) {
     return `<tr>
       <td class="mono">${utcTime(f.ts)}</td>
       <td>${esc(f.asset)}</td>
+      <td>${modePill(f.mode)}</td>
       <td><span class="pill ${f.side === "BUY" ? "buy" : "sell"}">${f.side === "BUY" ? "买入" : "卖出"}</span></td>
       <td>${outcomePill(f.position_side)}</td>
       <td class="mono">${fmt(f.price, 3)}</td>
@@ -174,28 +158,18 @@ function renderFills(rows) {
       <td class="mono">${pnl}</td>
     </tr>`;
   }).join("");
-  $("fills-tbody").innerHTML = html || '<tr><td colspan="10" class="no-data">暂无成交</td></tr>';
-}
-
-function renderSignals(rows) {
-  const html = rows.map((s) => `<tr>
-    <td class="mono">${utcTime(s.ts)}</td>
-    <td>${esc(s.asset)}</td>
-    <td>${outcomePill(s.side)}</td>
-    <td class="mono">${fmt(s.fair, 3)}</td>
-    <td class="mono">${fmt(s.ask, 3)}</td>
-    <td class="mono ${Number(s.edge) > 0 ? "green" : "red"}">${fmt(s.edge, 3)}</td>
-    <td>${s.acted ? '<span class="green">✓</span>' : "--"}</td>
-    <td class="muted">${esc(String(s.reason || "").slice(0, 48))}</td>
-  </tr>`).join("");
-  $("signals-tbody").innerHTML = html || '<tr><td colspan="8" class="no-data">暂无信号</td></tr>';
+  $("fills-tbody").innerHTML = html || '<tr><td colspan="11" class="no-data">暂无成交</td></tr>';
 }
 
 function renderNav(status) {
   const feeds = status.feeds || {};
   const rtds = feeds.rtds || {};
-  const ok = Object.keys(rtds).length > 0 &&
-    Object.values(rtds).every((x) => x && x.connected) &&
+  const enabled = Array.isArray(status.enabled_assets) && status.enabled_assets.length
+    ? new Set(status.enabled_assets)
+    : null;
+  const entries = Object.entries(rtds).filter(([asset]) => !enabled || enabled.has(asset));
+  const ok = entries.length > 0 &&
+    entries.every(([, x]) => x && x.connected) &&
     Boolean(feeds.clob?.connected);
   $("live-dot").className = "live-dot" + (ok ? "" : " offline");
   $("live-label").textContent = ok ? "在线" : "离线";
@@ -223,17 +197,6 @@ async function loadWindows() {
   updatePager("windows", state);
 }
 
-async function loadPositions() {
-  const state = PAGERS.positions;
-  const res = await getJSON(
-    `/api/positions?limit=${state.limit}&offset=${state.offset}${assetQuery()}`
-  );
-  renderPositions(res.data || []);
-  state.total = Number(res.pagination?.total || 0);
-  $("position-count").textContent = String(state.total);
-  updatePager("positions", state);
-}
-
 async function loadFills() {
   const state = PAGERS.fills;
   const res = await getJSON(
@@ -245,18 +208,8 @@ async function loadFills() {
   updatePager("fills", state);
 }
 
-async function loadSignals() {
-  const state = PAGERS.signals;
-  const res = await getJSON(
-    `/api/signals?limit=${state.limit}&offset=${state.offset}${assetQuery()}`
-  );
-  renderSignals(res.data || []);
-  state.total = Number(res.pagination?.total || 0);
-  $("signal-count").textContent = String(state.total);
-  updatePager("signals", state);
-}
-
 async function refresh() {
+  if (document.hidden) return; // don't poll from background tabs
   try {
     const [status, pnl] = await Promise.all([
       getJSON("/api/status"),
@@ -264,7 +217,7 @@ async function refresh() {
     ]);
     ensureAssetOptions(status);
     renderStats(pnl.summary || {});
-    await Promise.all([loadWindows(), loadPositions(), loadFills(), loadSignals()]);
+    await Promise.all([loadWindows(), loadFills()]);
     renderNav(status);
   } catch (e) {
     if (String(e.message) === "auth") return;
@@ -275,9 +228,7 @@ async function refresh() {
 document.addEventListener("DOMContentLoaded", () => {
   const loaders = {
     windows: loadWindows,
-    positions: loadPositions,
     fills: loadFills,
-    signals: loadSignals,
   };
   Object.keys(loaders).forEach((prefix) => {
     $(prefix + "-prev").addEventListener("click", () => {

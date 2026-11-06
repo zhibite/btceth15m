@@ -11,7 +11,6 @@
   <span class="brand">__MARKET_LABEL__</span>
   <a href="/">控制台</a>
   <a href="/trades">交易记录</a>
-  <a href="/maker">Maker 对照</a>
   <a href="/config" class="active">策略配置</a>
   <a href="/latency">延迟监控</a>
   <div class="nav-right">
@@ -26,26 +25,56 @@
   <div class="page-head">
     <div>
       <h1>策略配置</h1>
-      <div class="page-sub">选择币种单独覆盖参数；未覆盖的字段继承该币种默认或全局默认</div>
+      <div class="page-sub">币种列表里设置每个币的关键参数、开关与纸盘/实盘模式；其余参数作为通用参数对所有币种生效</div>
     </div>
     <div class="head-meta">
-      <label class="config-asset">币种
-        <select id="asset-select" class="market-select"></select>
-      </label>
-      <div>当前模式：<b id="mode">--</b> · <span id="override-state">--</span></div>
+      <div>全局默认：<b id="global-mode">--</b> · 实盘：<b id="live-state">--</b></div>
+      <div class="config-help">参数保存到 SQLite，重启后保留</div>
     </div>
   </div>
 
+  <div id="live-alert"></div>
+
+  <div class="config-group">
+    <h2><span class="dot"></span>币种列表<span class="count" id="asset-count">0 个币种</span></h2>
+    <div class="table-wrap">
+      <table class="config-table">
+        <thead>
+          <tr>
+            <th>币种</th>
+            <th>开启</th>
+            <th>模式</th>
+            <th>最小 Edge</th>
+            <th>模型缓冲</th>
+            <th>最大仓位</th>
+            <th>最早入场</th>
+            <th>最晚入场</th>
+            <th>最小 Fair</th>
+            <th>最小入场价</th>
+            <th>日损失上限</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="asset-tbody"><tr><td colspan="12" class="no-data">加载中...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="config-help" style="margin-top:10px">
+      表格显示当前生效值；改动过的数字会保存为该币种的独立覆盖，清空输入框则恢复继承。
+      「重置」删除该币种的全部参数覆盖。「跟随全局」使用全局默认的纸盘/实盘模式。
+    </div>
+  </div>
+
+  <div class="section-title">通用参数</div>
   <div id="groups"><div class="no-data">加载中...</div></div>
 
   <div class="save-bar">
     <span class="save-msg muted" id="save-msg">没有待保存的修改</span>
-    <button class="btn btn-ghost" id="reset-btn" type="button">恢复默认</button>
+    <button class="btn btn-ghost" id="reset-btn" type="button">恢复全局默认</button>
     <button class="btn btn-primary" id="save-btn" type="button" disabled>保存配置</button>
   </div>
 </div>
 
-<footer>__MARKET_LABEL__</footer>
+<footer>__MARKET_LABEL__ · 策略配置 · 时间均为 UTC</footer>
 
 <script src="/static/auth-nav.js?v=__ASSET_VERSION__"></script>
 <script src="/static/config.js?v=__ASSET_VERSION__"></script>

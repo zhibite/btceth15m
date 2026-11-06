@@ -149,6 +149,7 @@ class PaperBroker:
             size=preview.shares,
             fee=preview.fee,
             role="TAKER",
+            mode="paper",
         )
         pos = PaperPosition(
             id=0,
@@ -163,6 +164,7 @@ class PaperBroker:
             fees=preview.fee,
             entry_ts=now,
             price_to_beat=float(price_to_beat),
+            mode="paper",
         )
         pos.id = self._db.insert_position(pos)
         log.info(

@@ -120,3 +120,58 @@ def test_tick_interval_honours_fastest_asset_override():
         runtime=runtime,
     )
     assert StrategyEngine._tick_interval(engine) == 0.2
+
+
+def test_asset_override_is_partial_and_inherits_later_global_changes():
+    db = _FakeDB()
+    runtime = RuntimeConfig(db)
+    global_spread = runtime.params.max_spread
+
+    runtime.update({"min_edge": 0.11}, asset="SOL")
+    runtime.update({"max_spread": 0.02})
+
+    sol = runtime.params_for("SOL")
+    assert sol.min_edge == 0.11
+    # Only the field saved for SOL is frozen; the rest follows the global edit.
+    assert sol.max_spread == 0.02
+    assert sol.max_spread != global_spread
+
+
+def test_replace_key_overrides_replaces_only_key_fields():
+    db = _FakeDB()
+    runtime = RuntimeConfig(db)
+    runtime.update({"min_edge": 0.11, "max_spread": 0.02}, asset="SOL")
+
+    runtime.replace_key_overrides("SOL", {"model_buffer": 0.04})
+
+    sol = runtime.params_for("SOL")
+    assert sol.model_buffer == 0.04
+    # min_edge was a key field omitted from the patch -> back to inherit.
+    assert sol.min_edge == runtime.params.min_edge
+    # Non-key legacy snapshot values are preserved.
+    assert sol.max_spread == 0.02
+    assert set(runtime.override_fields_for("SOL")) == {"model_buffer", "max_spread"}
+
+    runtime.replace_key_overrides("SOL", {})
+    assert runtime.params_for("SOL").model_buffer == runtime.params.model_buffer
+    assert runtime.params_for("SOL").max_spread == 0.02
+    # The legacy non-key field is still an override; only key fields were reset.
+    assert runtime.has_override("SOL")
+    assert runtime.override_fields_for("SOL") == ["max_spread"]
+
+
+def test_asset_state_defaults_and_persistence():
+    db = _FakeDB()
+    runtime = RuntimeConfig(db)
+    assert runtime.is_enabled("BNB")
+    assert runtime.mode_for("BNB") == "inherit"
+    assert runtime.enabled_assets(["BTC", "BNB"]) == ["BTC", "BNB"]
+
+    runtime.set_asset_state("BNB", enabled=False, mode="paper")
+    assert not runtime.is_enabled("BNB")
+    assert runtime.mode_for("BNB") == "paper"
+    assert runtime.enabled_assets(["BTC", "BNB"]) == ["BTC"]
+
+    reloaded = RuntimeConfig(db)
+    assert not reloaded.is_enabled("BNB")
+    assert reloaded.mode_for("BNB") == "paper"

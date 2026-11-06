@@ -19,12 +19,18 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
-from src.config import StrategyParams, get_settings
-from src.execution.maker_shadow import summarize_shadow
+from src.config import (
+    ASSET_KEY_FIELDS,
+    AssetConfig,
+    StrategyParams,
+    get_settings,
+)
+from src.execution.live import LiveBroker
 from src.infra.logging import get_logger
 from src.web import auth
 
@@ -34,7 +40,10 @@ WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = WEB_DIR / "templates"
 STATIC_DIR = WEB_DIR / "static"
 
-app = FastAPI(title="BTC/ETH Paper Bot", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Polymarket 15m Bot", docs_url=None, redoc_url=None, openapi_url=None)
+# The dashboard polls /api/status every 2s. Its 7-asset JSON is ~18 KiB raw but
+# ~1.3 KiB gzipped because the payload is highly repetitive.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -62,7 +71,6 @@ def _asset_version() -> str:
             "config.js",
             "trades.js",
             "latency.js",
-            "maker.js",
         ):
             path = STATIC_DIR / name
             if path.exists():
@@ -84,7 +92,7 @@ def _render(name: str) -> HTMLResponse:
     html = (
         path.read_text(encoding="utf-8")
         .replace("__ASSET_VERSION__", ASSET_VERSION)
-        .replace("__MARKET_LABEL__", f"BTCETH{interval.upper()}")
+        .replace("__MARKET_LABEL__", f"POLY {interval.upper()}")
         .replace("__INTERVAL_LABEL__", interval)
     )
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
@@ -242,17 +250,97 @@ async def page_latency(request: Request) -> Any:
     return _render("latency.html")
 
 
-@app.get("/maker", response_class=HTMLResponse)
-async def page_maker(request: Request) -> Any:
-    redirect = _login_redirect(request)
-    if redirect is not None:
-        return redirect
-    return _render("maker.html")
-
-
 # ---------------------------------------------------------------------------
 # Health + read APIs
 # ---------------------------------------------------------------------------
+def _live_info(state: Any) -> dict:
+    settings = getattr(state, "settings", None)
+    live = getattr(state, "live", None)
+    enabled = bool(getattr(settings, "live_enabled", False))
+    credentials = bool(getattr(settings, "wallet_private_key", ""))
+    client_installed = LiveBroker.client_installed()
+    if live is not None:
+        available = bool(getattr(live, "available", False))
+        reason = str(getattr(live, "unavailable_reason", "") or "")
+    else:
+        available = enabled and credentials and client_installed
+        reason = ""
+        if not available:
+            if not enabled:
+                reason = "LIVE_ENABLED=false"
+            elif not credentials:
+                reason = "WALLET_PRIVATE_KEY 未配置"
+            else:
+                reason = "py-clob-client-v2 未安装"
+    return {
+        "enabled": enabled,
+        "available": available,
+        "client_installed": client_installed,
+        "credentials_configured": credentials,
+        "reason": reason,
+    }
+
+
+def _global_mode(state: Any) -> str:
+    settings = getattr(state, "settings", None)
+    if bool(getattr(settings, "paper_trading", True)):
+        return "paper"
+    if not bool(getattr(settings, "live_enabled", False)):
+        return "paper"
+    # The global default is live only when live is actually usable; otherwise
+    # "inherit" assets run as paper.
+    return "live" if _live_info(state)["available"] else "paper"
+
+
+def _effective_mode(state: Any, asset: str) -> str:
+    router = getattr(state, "router", None)
+    mode_for = getattr(router, "mode_for", None)
+    if callable(mode_for):
+        return str(mode_for(asset))
+    return _global_mode(state)
+
+
+def _asset_rows(state: Any) -> list[dict[str, Any]]:
+    runtime = state.runtime
+    assets = list(getattr(state.settings, "assets_list", []) or [])
+    rows: list[dict[str, Any]] = []
+    for asset in assets:
+        params = runtime.params_for(asset)
+        inherited = runtime.inherited_params_for(asset)
+        asset_state = runtime.asset_state_for(asset)
+        rows.append(
+            {
+                "asset": asset,
+                "enabled": bool(asset_state.get("enabled", True)),
+                "mode": str(asset_state.get("mode", "inherit")),
+                "effective_mode": _effective_mode(state, asset),
+                "params": {
+                    name: getattr(params, name) for name in ASSET_KEY_FIELDS
+                },
+                "inherited": {
+                    name: getattr(inherited, name) for name in ASSET_KEY_FIELDS
+                },
+                "override_fields": [
+                    name
+                    for name in runtime.override_fields_for(asset)
+                    if name in ASSET_KEY_FIELDS
+                ],
+                "source": runtime.source_for(asset),
+                "overridden": runtime.has_override(asset),
+            }
+        )
+    return rows
+
+
+def _asset_config_payload(state: Any) -> dict[str, Any]:
+    return {
+        "asset_rows": _asset_rows(state),
+        "key_fields": list(ASSET_KEY_FIELDS),
+        "global_mode": _global_mode(state),
+        "live": _live_info(state),
+    }
+
+
 @app.get("/api/health")
 async def api_health() -> dict:
     return {"ok": True, "ts": time.time()}
@@ -261,6 +349,17 @@ async def api_health() -> dict:
 @app.get("/api/status")
 async def api_status(_: None = Depends(require_read)) -> dict:
     state = _get_state()
+    configured = list(state.settings.assets_list)
+    enabled = state.runtime.enabled_assets(configured)
+    modes = {
+        asset: {
+            "enabled": state.runtime.is_enabled(asset),
+            "mode": state.runtime.mode_for(asset),
+            "effective_mode": _effective_mode(state, asset),
+        }
+        for asset in configured
+    }
+    live_info = _live_info(state)
     return _clean(
         {
             "mode": state.router.mode,
@@ -268,7 +367,21 @@ async def api_status(_: None = Depends(require_read)) -> dict:
             "killswitch": state.killswitch.to_dict(),
             "summary": state.db.summary(),
             "assets": state.engine.latest,
-            "configured_assets": state.settings.assets_list,
+            "configured_assets": configured,
+            "enabled_assets": enabled,
+            "asset_states": modes,
+            "modes": {
+                "global_default": _global_mode(state),
+                "live_enabled": live_info["enabled"],
+                "live_available": live_info["available"],
+                "paper_assets": [
+                    a for a in enabled if _effective_mode(state, a) == "paper"
+                ],
+                "live_assets": [
+                    a for a in enabled if _effective_mode(state, a) == "live"
+                ],
+            },
+            "live": live_info,
             "market_interval": getattr(state.settings, "market_interval", "15m"),
             "window_sec": getattr(state.settings, "window_sec", 900),
             "positions": state.db.open_positions(),
@@ -404,30 +517,6 @@ async def api_pnl(
     }
 
 
-@app.get("/api/maker-shadow")
-async def api_maker_shadow(
-    days: int = Query(14, ge=1, le=90),
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    _: None = Depends(require_read),
-) -> dict:
-    db = _get_state().db
-    rows = db.maker_shadow_rows(days)
-    summary, by_asset = summarize_shadow(rows)
-    total = db.count_maker_shadow(days)
-    payload = _paginated(
-        db.recent_maker_shadow(limit, offset, days), limit, offset, total
-    )
-    payload.update(
-        {
-            "days": int(days),
-            "summary": _clean(summary),
-            "by_asset": _clean(by_asset),
-        }
-    )
-    return payload
-
-
 # ---------------------------------------------------------------------------
 # Config + control APIs (always require a login)
 # ---------------------------------------------------------------------------
@@ -436,25 +525,31 @@ def _asset_key(asset: str | None) -> str | None:
     return value or None
 
 
+def _config_response(state: Any, key: str | None = None) -> dict:
+    runtime = state.runtime
+    params = runtime.params_for(key) if key else runtime.params
+    payload = {
+        "params": params.model_dump(),
+        "global_params": runtime.params.model_dump(),
+        "asset_defaults": {
+            asset: dict(values)
+            for asset, values in runtime.asset_defaults.items()
+        },
+        "assets": list(state.settings.assets_list),
+        "asset": key or "",
+        "source": runtime.source_for(key),
+        "overridden": bool(key and runtime.has_override(key)),
+        "mode": getattr(state.router, "mode", _global_mode(state)),
+    }
+    payload.update(_asset_config_payload(state))
+    return payload
+
+
 @app.get("/api/config")
 async def api_get_config(
     asset: str | None = Query(None), _: None = Depends(require_login)
 ) -> dict:
-    state = _get_state()
-    key = _asset_key(asset)
-    params = state.runtime.params_for(key) if key else state.runtime.params
-    return {
-        "params": params.model_dump(),
-        "global_params": state.runtime.params.model_dump(),
-        "asset_defaults": {
-            asset: dict(values) for asset, values in state.runtime.asset_defaults.items()
-        },
-        "assets": state.settings.assets_list,
-        "asset": key or "",
-        "source": state.runtime.source_for(key),
-        "overridden": bool(key and state.runtime.has_override(key)),
-        "mode": state.router.mode,
-    }
+    return _config_response(_get_state(), _asset_key(asset))
 
 
 @app.put("/api/config")
@@ -481,6 +576,112 @@ async def api_put_config(
     }
 
 
+class AssetConfigPatch(BaseModel):
+    asset: str
+    enabled: bool | None = None
+    mode: str | None = None
+    params: dict[str, Any] | None = None
+
+
+class ConfigBulkPayload(BaseModel):
+    global_params: dict[str, Any] | None = None
+    assets: list[AssetConfigPatch] = Field(default_factory=list)
+
+
+def _validate_bulk(state: Any, payload: ConfigBulkPayload) -> list[AssetConfigPatch]:
+    runtime = state.runtime
+    configured = {
+        str(a).upper() for a in getattr(state.settings, "assets_list", [])
+    }
+    live_info = _live_info(state)
+
+    if payload.global_params:
+        unknown = [
+            name
+            for name in payload.global_params
+            if name not in StrategyParams.model_fields
+        ]
+        if unknown:
+            raise HTTPException(
+                status_code=400, detail=f"未知的通用参数：{', '.join(unknown)}"
+            )
+        try:
+            StrategyParams.model_validate(
+                {**runtime.params.model_dump(), **payload.global_params}
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=400, detail=_validation_errors(exc)
+            ) from exc
+
+    seen: set[str] = set()
+    checked: list[AssetConfigPatch] = []
+    for item in payload.assets:
+        asset = _asset_key(item.asset)
+        if not asset or asset in seen:
+            raise HTTPException(status_code=400, detail="币种重复或为空")
+        if asset not in configured:
+            raise HTTPException(
+                status_code=400, detail=f"未配置的币种：{asset}"
+            )
+        seen.add(asset)
+        if item.mode is not None:
+            try:
+                AssetConfig(mode=item.mode)
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=400, detail=_validation_errors(exc)
+                ) from exc
+            if item.mode == "live" and not live_info["available"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"实盘不可用：{live_info['reason']}",
+                )
+        if item.params:
+            unknown = [
+                name for name in item.params if name not in ASSET_KEY_FIELDS
+            ]
+            if unknown:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"币种列表只能设置关键参数：{', '.join(unknown)}",
+                )
+            try:
+                StrategyParams.model_validate(
+                    {**runtime.params_for(asset).model_dump(), **item.params}
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=400, detail=_validation_errors(exc)
+                ) from exc
+        checked.append(item)
+    return checked
+
+
+@app.put("/api/config/bulk")
+async def api_put_config_bulk(
+    payload: ConfigBulkPayload, _: None = Depends(require_login)
+) -> dict:
+    state = _get_state()
+    checked = _validate_bulk(state, payload)
+    if payload.global_params:
+        state.runtime.update(payload.global_params)
+    for item in checked:
+        asset = str(item.asset).strip().upper()
+        if item.enabled is not None or item.mode is not None:
+            state.runtime.set_asset_state(
+                asset, enabled=item.enabled, mode=item.mode
+            )
+        if item.params is not None:
+            state.runtime.replace_key_overrides(asset, item.params)
+    log.info(
+        "web.config_bulk_updated",
+        global_fields=sorted((payload.global_params or {}).keys()),
+        assets=[str(item.asset).upper() for item in checked],
+    )
+    return {"ok": True, **_config_response(state)}
+
+
 @app.post("/api/config/reset")
 async def api_reset_config(
     payload: dict[str, Any] | None = None, _: None = Depends(require_login)
@@ -504,7 +705,8 @@ async def api_config_schema(_: None = Depends(require_login)) -> dict:
         "fields": [
             {"name": name, "default": field.default}
             for name, field in StrategyParams.model_fields.items()
-        ]
+        ],
+        "asset_key_fields": list(ASSET_KEY_FIELDS),
     }
 
 

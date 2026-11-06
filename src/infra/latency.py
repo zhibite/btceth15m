@@ -44,6 +44,7 @@ class LatencyTracker:
         )
         self._flushed: set[tuple[str, str, int]] = set()
         self._last_flush = 0.0
+        self._last_prune = time.time()
 
     # ── RTDS samples ─────────────────────────────────────────────────────
     def record_rtds(
@@ -97,6 +98,12 @@ class LatencyTracker:
         pruned = int((now - 7200) // 60 * 60)
         self._flushed = {k for k in self._flushed if k[2] >= pruned}
         self._last_flush = now
+        if self._db is not None and now - self._last_prune >= 86400:
+            try:
+                self._db.prune_latency()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("latency.prune_failed", error=str(exc))
+            self._last_prune = now
 
     def _write_bucket(self, asset: str, topic: str, bucket: int, samples: list) -> None:
         if self._db is None or not samples:

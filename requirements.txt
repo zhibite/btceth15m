@@ -11,5 +11,6 @@ structlog>=24.1
 numpy>=1.26
 tzdata>=2024.1
 
-# Live CLOB execution (optional, not needed for paper mode):
-# py-clob-client-v2>=1.0,<2
+# Live CLOB execution. Paper mode never imports it, so it is safe to install
+# in every deployment; it is only used when a coin is set to 实盘.
+py-clob-client-v2>=1.0,<2

@@ -11,7 +11,6 @@
   <span class="brand">__MARKET_LABEL__</span>
   <a href="/" class="active">控制台</a>
   <a href="/trades">交易记录</a>
-  <a href="/maker">Maker 对照</a>
   <a href="/config">策略配置</a>
   <a href="/latency">延迟监控</a>
   <div class="nav-right">
@@ -27,7 +26,7 @@
     <div class="control-status">
       <span class="control-dot running" id="control-dot"></span>
       <span class="control-label" id="control-label">策略运行中</span>
-      <span class="control-meta" id="control-meta">纸盘 · 自动扫描 BTC/ETH __INTERVAL_LABEL__ 窗口</span>
+      <span class="control-meta" id="control-meta">自动扫描 __INTERVAL_LABEL__ 窗口</span>
     </div>
     <div class="control-actions">
       <button class="btn btn-danger" id="stop-btn" type="button">紧急停止</button>
@@ -54,7 +53,7 @@
     <div class="stat-card">
       <div class="stat-label">当前窗口剩余</div>
       <div class="stat-value orange" id="window-remain">--</div>
-      <div class="stat-sub">BTC / ETH __INTERVAL_LABEL__ 窗口</div>
+      <div class="stat-sub" id="window-sub">__INTERVAL_LABEL__ 窗口</div>
     </div>
   </div>
 
@@ -65,9 +64,9 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>币种</th><th>窗口开始 (UTC)</th><th>方向</th><th>份额</th><th>均价</th><th>成本</th><th>手续费</th><th>状态</th></tr>
+          <tr><th>币种</th><th>模式</th><th>窗口开始 (UTC)</th><th>方向</th><th>份额</th><th>均价</th><th>成本</th><th>手续费</th><th>状态</th></tr>
         </thead>
-        <tbody id="positions-tbody"><tr><td colspan="8" class="no-data">无持仓</td></tr></tbody>
+        <tbody id="positions-tbody"><tr><td colspan="9" class="no-data">无持仓</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -77,9 +76,9 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>时间 (UTC)</th><th>币种</th><th>方向</th><th>持仓</th><th>价格</th><th>份额</th><th>手续费</th><th>方式</th><th>结果</th><th>盈亏</th></tr>
+          <tr><th>时间 (UTC)</th><th>币种</th><th>模式</th><th>方向</th><th>持仓</th><th>价格</th><th>份额</th><th>手续费</th><th>方式</th><th>结果</th><th>盈亏</th></tr>
         </thead>
-        <tbody id="fills-tbody"><tr><td colspan="10" class="no-data">暂无成交</td></tr></tbody>
+        <tbody id="fills-tbody"><tr><td colspan="11" class="no-data">暂无成交</td></tr></tbody>
       </table>
     </div>
     <div class="pager" id="fills-pager">
@@ -107,7 +106,7 @@
   </div>
 </div>
 
-<footer>__MARKET_LABEL__ · 纸盘模拟 · 数据每 2 秒刷新 · 时间均为 UTC</footer>
+<footer>__MARKET_LABEL__ · 数据每 2 秒刷新 · 时间均为 UTC</footer>
 
 <dialog class="modal" id="confirm-dialog">
   <form method="dialog">

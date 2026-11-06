@@ -2,25 +2,21 @@
 
 const $ = (id) => document.getElementById(id);
 
-const GROUPS = [
-  {
-    title: "入场与 Edge",
-    fields: [
-      { key: "min_edge", label: "最小 Edge", help: "公允概率 − 成交均价 − 手续费 的最低值；低于该值不入场。", step: 0.01 },
-      { key: "model_buffer", label: "模型缓冲", help: "额外安全边际，抵消模型的过度自信；入场阈值 = 最小 Edge + 模型缓冲。", step: 0.01 },
-      { key: "min_fair", label: "最小 Fair（方向）", help: "只考虑模型概率不低于该值的方向；过滤 fair≈0.5 的彩票票。0 = 关闭。", step: 0.01 },
-      { key: "min_entry_price", label: "最小有效入场价", help: "含手续费的平均成交价低于该值时不入场；便宜票意味着市场不认同模型，模型偏自信时尤其危险。0 = 关闭。", step: 0.01 },
-      { key: "max_position_usd", label: "单笔名义金额", help: "每个窗口最多投入的 USDC。", step: 0.5, unit: "USDC" },
-      { key: "entry_min_rel_s", label: "最早入场（秒）", help: "窗口开始后多少秒才允许入场。", step: 1, unit: "秒" },
-      { key: "entry_max_rel_s", label: "最晚入场（秒）", help: "窗口结束前多少秒停止入场。", step: 1, unit: "秒" },
-    ],
-  },
-  {
-    title: "风控",
-    fields: [
-      { key: "daily_loss_limit_usd", label: "日损失上限", help: "该币种当日已实现亏损达到该值后停止新入场；全局默认值同时作为所有币种合计的止损上限。", step: 1, unit: "USDC" },
-    ],
-  },
+// Per-asset key parameters shown in the asset table. Everything else is a
+// common parameter below. Keep this list in sync with ASSET_KEY_FIELDS in
+// src/config.py (the API rejects unknown key fields).
+const KEY_FIELDS = [
+  { key: "min_edge", step: 0.01, title: "fair − 成交均价 − fee 的最低值；低于该值不入场" },
+  { key: "model_buffer", step: 0.01, title: "额外安全边际；入场阈值 = 最小 Edge + 模型缓冲" },
+  { key: "max_position_usd", step: 0.5, title: "每个窗口最多投入的 USDC" },
+  { key: "entry_min_rel_s", step: 1, title: "窗口开始后多少秒才允许入场" },
+  { key: "entry_max_rel_s", step: 1, title: "窗口开始后多少秒停止入场" },
+  { key: "min_fair", step: 0.01, title: "方向 fair 下限；0 = 关闭" },
+  { key: "min_entry_price", step: 0.01, title: "含费有效入场价下限；0 = 关闭" },
+  { key: "daily_loss_limit_usd", step: 1, title: "该币种当日已实现亏损达到该值后停止入场" },
+];
+
+const COMMON_GROUPS = [
   {
     title: "盘口过滤",
     fields: [
@@ -41,24 +37,22 @@ const GROUPS = [
     ],
   },
   {
-    title: "Maker 影子",
+    title: "组合风控",
     fields: [
-      { key: "maker_shadow_enabled", label: "启用影子对比", type: "bool", help: "每次 taker 入场时并行模拟 maker-first 路径；只写统计，不改变实际纸盘成交。" },
-      { key: "maker_buffer", label: "Maker 安全边际", help: "挂在 bid 时额外要求的 edge，用来抵消被动成交的逆向选择。", step: 0.01 },
-      { key: "maker_fallback_rel_s", label: "转 Taker 时间", help: "窗口开始后多少秒仍未成交，就按当前 ask 模拟 taker fallback。", step: 5, unit: "秒" },
-      { key: "maker_chase_bid", label: "跟随买一", type: "bool", help: "买一上移时撤单改挂到新的 best bid；关闭则保持原价排队。" },
+      { key: "daily_loss_limit_usd", label: "组合日损失上限", help: "所有币种合计的当日已实现亏损上限；同时作为未单独设置日损失上限的币种默认值。", step: 1, unit: "USDC" },
     ],
   },
 ];
 
 let DATA = null;
-let INITIAL = {};
-let ASSET = ""; // "" = 全局默认
+const INITIAL = { assets: {}, global: {} };
 
 const esc = (v) =>
   String(v === null || v === undefined ? "" : v).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+
+const modeLabel = (mode) => (mode === "live" ? "实盘" : "纸盘");
 
 function redirectLogin() {
   location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
@@ -91,23 +85,88 @@ function formatDetail(detail) {
   return detail || "请求失败";
 }
 
-function fieldHtml(field) {
-  const value = DATA.params[field.key];
-  const unit = field.unit ? `<span class="config-unit">${esc(field.unit)}</span>` : "";
-  if (field.type === "bool") {
-    return `<div class="field" data-field="${esc(field.key)}">
-      <label>${esc(field.label)}</label>
-      <div style="display:flex;align-items:center;gap:6px">
-        <input type="checkbox" data-key="${esc(field.key)}"${value ? " checked" : ""}>
-      </div>
-      <div class="config-help">${esc(field.help || "")}</div>
-      <div class="config-key">${esc(field.key)}</div>
-    </div>`;
+/* ── Asset table ──────────────────────────────────────────────────────── */
+function sourceLabel(row) {
+  const source = row.source;
+  let text = source === "override"
+    ? "已覆盖"
+    : source === "asset_default"
+      ? "币种默认"
+      : "继承全局";
+  if (row.mode === "live" && row.effective_mode !== "live") {
+    text += " · 实盘不可用，按纸盘";
   }
+  return text;
+}
+
+function modeSelect(row) {
+  const live = DATA.live || {};
+  const options = [
+    ["inherit", `跟随全局（${modeLabel(DATA.global_mode)}）`],
+    ["paper", "纸盘"],
+    ["live", "实盘"],
+  ];
+  return `<select data-role="mode" class="config-select">
+    ${options.map(([value, label]) => {
+      const disabled = value === "live" && !live.available ? " disabled" : "";
+      const title = disabled
+        ? ` title="实盘不可用：${esc(live.reason || "")}"`
+        : "";
+      return `<option value="${value}"${row.mode === value ? " selected" : ""}${disabled}${title}>${esc(label)}</option>`;
+    }).join("")}
+  </select>`;
+}
+
+function keyCell(row, field) {
+  const value = row.params[field.key];
+  const overridden = (row.override_fields || []).includes(field.key);
+  return `<td class="config-num-cell${overridden ? " overridden" : ""}">
+    <input type="number" class="config-num" data-key="${esc(field.key)}"
+      step="${esc(field.step)}" value="${esc(value)}" title="${esc(field.title || "")}">
+  </td>`;
+}
+
+function renderAssetTable() {
+  const rows = DATA.asset_rows || [];
+  $("asset-count").textContent = rows.length + " 个币种";
+  INITIAL.assets = {};
+  if (!rows.length) {
+    $("asset-tbody").innerHTML = '<tr><td colspan="12" class="no-data">未配置币种</td></tr>';
+    return;
+  }
+  $("asset-tbody").innerHTML = rows.map((row) => {
+    INITIAL.assets[row.asset] = {
+      enabled: Boolean(row.enabled),
+      mode: row.mode || "inherit",
+      params: Object.assign({}, row.params),
+      inherited: Object.assign({}, row.inherited),
+      override_fields: (row.override_fields || []).slice(),
+    };
+    return `<tr data-asset="${esc(row.asset)}" class="${row.enabled ? "" : "asset-off"}">
+      <td class="asset-name">
+        <div>${esc(row.asset)}</div>
+        <div class="config-help">${esc(sourceLabel(row))}</div>
+      </td>
+      <td class="config-center">
+        <input type="checkbox" data-role="enabled" class="config-check"${row.enabled ? " checked" : ""}>
+      </td>
+      <td>${modeSelect(row)}</td>
+      ${KEY_FIELDS.map((field) => keyCell(row, field)).join("")}
+      <td class="config-center">
+        <button class="btn btn-ghost btn-sm" type="button" data-role="reset">重置</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+/* ── Common params ────────────────────────────────────────────────────── */
+function fieldHtml(field) {
+  const value = DATA.global_params[field.key];
+  const unit = field.unit ? `<span class="config-unit">${esc(field.unit)}</span>` : "";
   return `<div class="field" data-field="${esc(field.key)}">
     <label>${esc(field.label)}</label>
     <div style="display:flex;align-items:center;gap:6px">
-      <input type="number" step="${esc(field.step || "any")}" data-key="${esc(field.key)}" value="${esc(value)}">
+      <input type="number" step="${esc(field.step || "any")}" data-common="${esc(field.key)}" value="${esc(value)}">
       ${unit}
     </div>
     <div class="config-help">${esc(field.help || "")}</div>
@@ -115,111 +174,155 @@ function fieldHtml(field) {
   </div>`;
 }
 
-function renderAssetSelect(assets) {
-  const select = $("asset-select");
-  if (!select) return;
-  const options = ['<option value="">全局默认</option>'].concat(
-    (assets || []).map((asset) => `<option value="${esc(asset)}">${esc(asset)}</option>`)
-  );
-  select.innerHTML = options.join("");
-  select.value = ASSET;
-}
-
-function configSource() {
-  if (!ASSET) return "global";
-  if (DATA.source) return DATA.source;
-  return DATA.overridden ? "override" : "global";
-}
-
-function render() {
-  $("mode").textContent = DATA.mode === "paper" ? "纸盘" : "实盘";
-  const source = configSource();
-  const state = $("override-state");
-  if (state) {
-    state.textContent = !ASSET
-      ? "全局默认"
-      : source === "override"
-        ? "已单独设置"
-        : source === "asset_default"
-          ? "币种默认"
-          : "继承全局";
-  }
-  const resetBtn = $("reset-btn");
-  if (resetBtn) {
-    resetBtn.textContent = !ASSET
-      ? "恢复默认"
-      : source === "override"
-        ? "取消币种覆盖"
-        : "恢复币种默认";
-    resetBtn.disabled = Boolean(ASSET) && source !== "override";
-  }
-  INITIAL = Object.assign({}, DATA.params);
-  $("groups").innerHTML = GROUPS.map((group) => `<div class="config-group">
+function renderCommon() {
+  INITIAL.global = Object.assign({}, DATA.global_params);
+  $("groups").innerHTML = COMMON_GROUPS.map((group) => `<div class="config-group">
     <h2><span class="dot"></span>${esc(group.title)}<span class="count">${group.fields.length} 项</span></h2>
     <div class="config-grid">${group.fields.map(fieldHtml).join("")}</div>
   </div>`).join("");
-  document.querySelectorAll("#groups [data-key]").forEach((el) => {
-    el.addEventListener("input", () => {
-      const box = el.closest(".field");
-      if (box) box.classList.toggle("changed", fieldChanged(el));
-      updateSaveState();
-    });
-  });
+}
+
+function renderLiveInfo() {
+  const live = DATA.live || {};
+  $("global-mode").textContent = modeLabel(DATA.global_mode);
+  $("live-state").textContent = live.available
+    ? "可用"
+    : (live.enabled ? "不可用" : "未启用");
+  const alert = $("live-alert");
+  if (live.available) {
+    alert.innerHTML = "";
+  } else {
+    const reason = live.reason || (live.enabled ? "实盘客户端不可用" : "LIVE_ENABLED=false");
+    alert.innerHTML = `<div class="alert warn">实盘不可用：${esc(reason)}。所有已开启币种按纸盘运行。</div>`;
+  }
+}
+
+function render() {
+  renderLiveInfo();
+  renderAssetTable();
+  renderCommon();
+  bindInputs();
   updateSaveState();
 }
 
-function fieldChanged(el) {
-  const initial = INITIAL[el.dataset.key];
-  if (el.type === "checkbox") return el.checked !== Boolean(initial);
+/* ── Change tracking ──────────────────────────────────────────────────── */
+function commonChanged(el) {
+  const initial = INITIAL.global[el.dataset.common];
   return Number(el.value) !== Number(initial);
 }
 
-function fieldValue(el) {
-  return el.type === "checkbox" ? el.checked : Number(el.value);
+function assetRowChanged(tr) {
+  const asset = tr.dataset.asset;
+  const init = INITIAL.assets[asset];
+  if (!init) return false;
+  if (tr.querySelector('[data-role="enabled"]').checked !== init.enabled) return true;
+  if (tr.querySelector('[data-role="mode"]').value !== init.mode) return true;
+  return Array.from(tr.querySelectorAll("[data-key]")).some((el) => {
+    const key = el.dataset.key;
+    const raw = el.value.trim();
+    if (raw === "") return init.override_fields.includes(key);
+    const value = Number(raw);
+    return Number.isFinite(value) && Math.abs(value - Number(init.params[key])) > 1e-9;
+  });
 }
 
-function changedFields() {
-  return Array.from(document.querySelectorAll("#groups [data-key]")).filter(
-    fieldChanged
-  );
+function collectCommonPatch() {
+  const patch = {};
+  document.querySelectorAll("#groups [data-common]").forEach((el) => {
+    if (!commonChanged(el)) return;
+    const value = Number(el.value);
+    if (Number.isFinite(value)) patch[el.dataset.common] = value;
+  });
+  return patch;
+}
+
+function collectAssetPatch(tr) {
+  const asset = tr.dataset.asset;
+  const init = INITIAL.assets[asset];
+  const params = {};
+  tr.querySelectorAll("[data-key]").forEach((el) => {
+    const key = el.dataset.key;
+    const raw = el.value.trim();
+    if (raw === "") return; // empty = inherit; omit from the override patch
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return;
+    const inherited = Number(init.inherited[key]);
+    if (Math.abs(value - inherited) > 1e-9) params[key] = value;
+  });
+  // Only send a switch that actually changed. This matters when a coin was
+  // saved as live and live is now unavailable: editing its params/on-off must
+  // not resend mode=live and be rejected by the server.
+  const patch = { asset, params };
+  const enabled = tr.querySelector('[data-role="enabled"]').checked;
+  const mode = tr.querySelector('[data-role="mode"]').value;
+  if (enabled !== init.enabled) patch.enabled = enabled;
+  if (mode !== init.mode) patch.mode = mode;
+  return patch;
+}
+
+function changedAssetRows() {
+  return Array.from(document.querySelectorAll("#asset-tbody tr[data-asset]"))
+    .filter(assetRowChanged)
+    .map(collectAssetPatch);
+}
+
+function changedFieldCount() {
+  return Array.from(document.querySelectorAll("#groups [data-common]"))
+    .filter(commonChanged).length;
 }
 
 function updateSaveState() {
-  const changed = changedFields();
-  $("save-btn").disabled = changed.length === 0;
-  $("save-msg").textContent = changed.length
-    ? changed.length + " 项待保存"
+  const assets = changedAssetRows();
+  const common = changedFieldCount();
+  const count = assets.length + common;
+  $("save-btn").disabled = count === 0;
+  $("save-msg").textContent = count
+    ? `${assets.length} 个币种、${common} 个通用参数待保存`
     : "没有待保存的修改";
 }
 
-async function load(asset = "") {
+function bindInputs() {
+  document.querySelectorAll("#asset-tbody [data-role], #asset-tbody [data-key]").forEach((el) => {
+    el.addEventListener("input", updateSaveState);
+    el.addEventListener("change", updateSaveState);
+  });
+  document.querySelectorAll("#groups [data-common]").forEach((el) => {
+    el.addEventListener("input", () => {
+      const box = el.closest(".field");
+      if (box) box.classList.toggle("changed", commonChanged(el));
+      updateSaveState();
+    });
+  });
+  document.querySelectorAll('#asset-tbody [data-role="reset"]').forEach((btn) => {
+    btn.addEventListener("click", () => resetAsset(btn.closest("tr").dataset.asset));
+  });
+}
+
+/* ── Load / save / reset ──────────────────────────────────────────────── */
+async function load() {
   try {
-    const query = asset ? "?asset=" + encodeURIComponent(asset) : "";
-    DATA = await getJSON("/api/config" + query);
-    ASSET = DATA.asset || "";
-    renderAssetSelect(DATA.assets || []);
+    DATA = await getJSON("/api/config");
     render();
   } catch (e) {
     if (String(e.message) === "auth") return;
     $("groups").innerHTML = '<div class="alert warn">读取配置失败：' + esc(e.message) + "</div>";
+    $("asset-tbody").innerHTML = '<tr><td colspan="12" class="no-data">读取配置失败</td></tr>';
   }
 }
 
 async function saveConfig() {
-  const patch = {};
-  document.querySelectorAll("#groups [data-key]").forEach((el) => {
-    patch[el.dataset.key] = fieldValue(el);
-  });
+  const assets = changedAssetRows();
+  const globalPatch = collectCommonPatch();
+  if (!assets.length && !Object.keys(globalPatch).length) return;
+  const body = { assets };
+  if (Object.keys(globalPatch).length) body.global_params = globalPatch;
   $("save-btn").disabled = true;
   $("save-msg").textContent = "保存中...";
   try {
-    const res = await sendJSON("/api/config", "PUT", {
-      asset: ASSET,
-      params: patch,
-    });
-    DATA = Object.assign({}, DATA, res);
+    const res = await sendJSON("/api/config/bulk", "PUT", body);
+    DATA = res;
     render();
-    $("save-msg").textContent = ASSET ? `已保存（${ASSET}）` : "已保存（全局）";
+    $("save-msg").textContent = "已保存";
     setTimeout(updateSaveState, 4000);
   } catch (e) {
     if (String(e.message) !== "auth") {
@@ -229,35 +332,45 @@ async function saveConfig() {
   }
 }
 
-async function resetConfig() {
-  const label = ASSET ? `${ASSET} 的币种覆盖` : "全局默认";
-  if (!confirm(`恢复${label}？`)) return;
+async function resetAsset(asset) {
+  if (!confirm(`重置 ${asset} 的全部参数覆盖？`)) return;
   try {
-    const res = await sendJSON("/api/config/reset", "POST", { asset: ASSET });
-    DATA = Object.assign({}, DATA, res);
-    render();
-    $("save-msg").textContent = ASSET
-      ? `已恢复 ${ASSET} 的全局继承`
-      : "已恢复全局默认";
-    setTimeout(updateSaveState, 4000);
+    await sendJSON("/api/config/reset", "POST", { asset });
+    await load();
+    $("save-msg").textContent = `已重置 ${asset}`;
   } catch (e) {
-    if (String(e.message) !== "auth") {
-      $("save-msg").textContent = "重置失败：" + e.message;
-    }
+    if (String(e.message) !== "auth") $("save-msg").textContent = "重置失败：" + e.message;
   }
 }
 
+async function resetGlobal() {
+  if (!confirm("恢复全局默认参数？已保存的币种覆盖不会删除。")) return;
+  try {
+    await sendJSON("/api/config/reset", "POST", {});
+    await load();
+    $("save-msg").textContent = "已恢复全局默认";
+  } catch (e) {
+    if (String(e.message) !== "auth") $("save-msg").textContent = "重置失败：" + e.message;
+  }
+}
+
+/* ── Nav ──────────────────────────────────────────────────────────────── */
 function clockStr() {
   return new Date().toISOString().slice(11, 19) + " UTC";
 }
 
 async function refreshNav() {
+  if (document.hidden) return; // don't poll from background tabs
   try {
     const s = await getJSON("/api/status");
     const feeds = s.feeds || {};
     const rtds = feeds.rtds || {};
-    const ok = Object.keys(rtds).length > 0 &&
-      Object.values(rtds).every((x) => x && x.connected) &&
+    const enabled = Array.isArray(s.enabled_assets) && s.enabled_assets.length
+      ? new Set(s.enabled_assets)
+      : null;
+    const entries = Object.entries(rtds).filter(([asset]) => !enabled || enabled.has(asset));
+    const ok = entries.length > 0 &&
+      entries.every(([, x]) => x && x.connected) &&
       Boolean(feeds.clob?.connected);
     $("live-dot").className = "live-dot" + (ok ? "" : " offline");
     $("live-label").textContent = ok ? "在线" : "离线";
@@ -268,15 +381,7 @@ async function refreshNav() {
 
 document.addEventListener("DOMContentLoaded", () => {
   $("save-btn").addEventListener("click", saveConfig);
-  $("reset-btn").addEventListener("click", resetConfig);
-  $("asset-select").addEventListener("change", async (e) => {
-    const next = e.target.value;
-    if (changedFields().length && !confirm("当前有未保存修改，切换后会丢失，继续？")) {
-      e.target.value = ASSET;
-      return;
-    }
-    await load(next);
-  });
+  $("reset-btn").addEventListener("click", resetGlobal);
   $("clock").textContent = clockStr();
   setInterval(() => { $("clock").textContent = clockStr(); }, 1000);
   load();

@@ -1,6 +1,6 @@
 """Polymarket CLOB market WebSocket: order books and last trades.
 
-The feed subscribes to the union of the current 5m window tokens for every
+The feed subscribes to the union of the current window tokens for every
 asset. A token-set change (new window) bumps a version and forces a clean
 reconnect so no stale subscription lingers.
 """
@@ -9,8 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections import deque
-from typing import Any, Optional
+from typing import Optional
 
 import websockets
 
@@ -34,11 +33,8 @@ class ClobWsFeed:
         self.reconnect_max_s = float(reconnect_max_s)
         self.books: dict[str, OrderBook] = {}
         self.last_trade: dict[str, tuple[float, float, float]] = {}
-        # Every last_trade_price event since the last drain. The maker shadow
-        # needs the full print stream (side/price/size) to simulate queue fills;
-        # `last_trade` alone is not enough.
-        self.trade_events: deque[dict[str, Any]] = deque(maxlen=50000)
         self._tokens: dict[str, list[str]] = {a: [] for a in self.assets}
+        self._active_tokens: set[str] = set()
         self._version = 0
         self._running = False
         self._task: asyncio.Task | None = None
@@ -52,21 +48,27 @@ class ClobWsFeed:
         if self._tokens.get(asset) == clean:
             return
         self._tokens[asset] = clean
+        active = {t for ts in self._tokens.values() for t in ts}
+        self._active_tokens = active
         for token in clean:
             self.books.setdefault(token, OrderBook(token))
+        # Tokens from expired windows must not accumulate forever. Keeping only
+        # the currently subscribed set also stops in-flight messages for old
+        # tokens from re-adding them after the prune.
+        for token in list(self.books):
+            if token not in active:
+                self.books.pop(token, None)
+                self.last_trade.pop(token, None)
         self._version += 1
-        log.info("clob.tokens", asset=asset, tokens=[t[:10] for t in clean])
+        log.info(
+            "clob.tokens",
+            asset=asset,
+            tokens=[t[:10] for t in clean],
+            active=len(active),
+        )
 
     def book(self, token_id: str) -> Optional[OrderBook]:
         return self.books.get(str(token_id))
-
-    def drain_trades(self) -> list[dict[str, Any]]:
-        """Return and clear the trade prints received since the last call."""
-        if not self.trade_events:
-            return []
-        events = list(self.trade_events)
-        self.trade_events.clear()
-        return events
 
     def start(self) -> None:
         self._running = True
@@ -88,6 +90,7 @@ class ClobWsFeed:
             "last_error": self.last_error,
             "last_msg_ts": self.last_msg_ts,
             "tokens": {a: len(t) for a, t in self._tokens.items()},
+            "active_tokens": len(self._active_tokens),
         }
 
     async def _run(self) -> None:
@@ -151,15 +154,15 @@ class ClobWsFeed:
                 self._on_change(change)
 
     def _on_snapshot(self, item: dict) -> None:
-        token = str(item.get("asset_id"))
-        if not token:
+        token = str(item.get("asset_id") or "")
+        if not token or token not in self._active_tokens:
             return
         book = self.books.setdefault(token, OrderBook(token))
         book.apply_snapshot(item.get("bids"), item.get("asks"), time.time())
 
     def _on_change(self, change: dict) -> None:
         token = str(change.get("asset_id") or "")
-        if not token:
+        if not token or token not in self._active_tokens:
             return
         book = self.books.setdefault(token, OrderBook(token))
         try:
@@ -171,29 +174,11 @@ class ClobWsFeed:
 
     def _on_trade(self, item: dict) -> None:
         token = str(item.get("asset_id") or "")
-        if not token:
+        if not token or token not in self._active_tokens:
             return
         try:
             price = float(item.get("price"))
             size = float(item.get("size") or 0.0)
         except (TypeError, ValueError):
             return
-        now = time.time()
-        self.last_trade[token] = (price, size, now)
-        exchange_ts: Optional[float] = None
-        try:
-            raw_ts = item.get("timestamp")
-            if raw_ts is not None:
-                exchange_ts = float(raw_ts) / 1000.0
-        except (TypeError, ValueError):
-            exchange_ts = None
-        self.trade_events.append(
-            {
-                "token_id": token,
-                "side": str(item.get("side") or "").upper(),
-                "price": price,
-                "size": size,
-                "ts": now,
-                "exchange_ts": exchange_ts,
-            }
-        )
+        self.last_trade[token] = (price, size, time.time())

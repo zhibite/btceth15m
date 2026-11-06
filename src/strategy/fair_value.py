@@ -1,4 +1,4 @@
-"""TWAP-native fair value for Polymarket 5m Up/Down markets.
+"""TWAP-native fair value for Polymarket 15m/5m Up/Down markets.
 
 Settlement is the Chainlink 60s TWAP at the window end. At time t:
   * before the final 60s window starts: expected close = current spot,

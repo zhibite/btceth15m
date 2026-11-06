@@ -16,7 +16,6 @@ import uvicorn
 
 from src.config import RuntimeConfig, get_settings, get_strategy_defaults
 from src.execution.live import LiveBroker
-from src.execution.maker_shadow import MakerShadow
 from src.execution.paper import PaperBroker
 from src.execution.router import BrokerRouter
 from src.feeds.clob_ws import ClobWsFeed
@@ -46,6 +45,7 @@ class AppState:
     rtds: RtdsFeed
     books: ClobWsFeed
     paper: PaperBroker
+    live: LiveBroker
     router: BrokerRouter
     engine: StrategyEngine
     latency: LatencyTracker
@@ -133,9 +133,8 @@ async def main() -> None:
         reconnect_max_s=settings.reconnect_max_s,
     )
     paper = PaperBroker(db, runtime)
-    live = LiveBroker(settings) if settings.live_enabled else None
-    router = BrokerRouter(settings, paper, live)
-    maker_shadow = MakerShadow(db)
+    live = LiveBroker(settings, db, runtime)
+    router = BrokerRouter(settings, paper, live, runtime)
     engine = StrategyEngine(
         settings=settings,
         runtime=runtime,
@@ -148,7 +147,6 @@ async def main() -> None:
         paper=paper,
         router=router,
         latency=latency,
-        maker_shadow=maker_shadow,
     )
     windows.on_window = engine.on_window
 
@@ -163,6 +161,7 @@ async def main() -> None:
         rtds=rtds,
         books=books,
         paper=paper,
+        live=live,
         router=router,
         engine=engine,
         latency=latency,
@@ -173,11 +172,19 @@ async def main() -> None:
         "boot",
         assets=settings.assets_list,
         mode=router.mode,
+        modes=router.modes_by_asset(),
         live_enabled=settings.live_enabled,
+        live_available=live.available,
         db=str(settings.db_path),
         web=f"{settings.web_host}:{settings.web_port}",
         params=runtime.params.model_dump(),
     )
+    if settings.live_enabled and not live.available:
+        log.warning(
+            "live.unavailable",
+            reason=live.unavailable_reason,
+            note="assets set to live will run as paper",
+        )
 
     rtds.start()
     books.start()

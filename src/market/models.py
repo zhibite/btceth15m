@@ -140,6 +140,7 @@ class PaperPosition:
     payout: float = 0.0
     pnl: float = 0.0
     settled_ts: float = 0.0
+    mode: str = "paper"  # paper / live
 
     def to_dict(self) -> dict:
         return {
@@ -159,6 +160,7 @@ class PaperPosition:
             "payout": self.payout,
             "pnl": self.pnl,
             "settled_ts": self.settled_ts,
+            "mode": self.mode,
         }
 
 

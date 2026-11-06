@@ -26,6 +26,9 @@ def test_strategy_defaults_are_sane():
     assert 0 < params.model_buffer < 1
     assert params.max_position_usd > 0
     assert params.entry_min_rel_s < params.entry_max_rel_s
+    # The maker-shadow module and its knobs were removed.
+    assert not hasattr(params, "maker_shadow_enabled")
+    assert not hasattr(params, "maker_buffer")
 
 
 def test_interval_helpers():

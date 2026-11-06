@@ -1,9 +1,11 @@
 ###############################################################################
-# Polymarket BTC/ETH Up/Down TWAP paper bot (default: 15m markets)
+# Polymarket crypto Up/Down TWAP bot (15m markets, multi-asset paper/live)
 ###############################################################################
 
 [GENERAL]
-ASSETS = "BTC,ETH"
+# Feed/trade universe. Per-asset on/off and paper/live mode are runtime
+# settings on the config page (persisted in SQLite).
+ASSETS = "BTC,ETH,BNB,SOL,XRP,DOGE,HYPE"
 # Market cadence. Controls both the Gamma slug (``{asset}-updown-15m-{ts}``)
 # and the window duration; WINDOW_SEC must match.
 MARKET_INTERVAL = "15m"
@@ -44,7 +46,8 @@ MIN_FAIR = 0.0
 MIN_ENTRY_PRICE = 0.0
 MAX_POSITION_USD = 5.0
 DAILY_LOSS_LIMIT_USD = 20.0
-# Global fallback. BTC/ETH have explicit 15m overrides below.
+# Global fallback (used by BNB/SOL/XRP/DOGE/HYPE and any asset without an
+# explicit table below). BTC/ETH have explicit 15m overrides.
 ENTRY_MIN_REL_S = 540
 ENTRY_MAX_REL_S = 870
 MAX_SPREAD = 0.03
@@ -57,18 +60,14 @@ MIN_SIGMA_SAMPLES = 120
 ENGINE_TICK_S = 0.5
 SIGNAL_LOG_MIN_EDGE = 0.02
 
-# Maker shadow: simulate a maker-first entry next to the real taker paper
-# fill. It only writes comparison stats; it never changes paper execution.
-MAKER_SHADOW_ENABLED = true
-MAKER_BUFFER = 0.01
-# Leave the last 60s (the settlement TWAP window) for the fallback taker.
-MAKER_FALLBACK_REL_S = 840
-MAKER_CHASE_BID = true
-
 # ── Per-asset defaults ──────────────────────────────────────────────────
 # Partial overrides merged over [STRATEGY]. Fields not listed inherit the
-# current global value; the dashboard can still save a per-asset override on
+# current global value; the config page can still save per-asset overrides on
 # top of these (stored in SQLite).
+#
+# BNB/SOL/XRP/DOGE/HYPE intentionally have no table here: they run the same
+# common parameters ("统一参数纸盘") until their own 15m backtests exist.
+#
 # 15m defaults from the 7-day backtest (2026-10-30 → 2026-11-06, 662 windows
 # per asset, Binance proxy + last-trade prices + 1/2/3¢ slippage).
 # Both gated configs stayed positive in out-of-sample walk-forward at all

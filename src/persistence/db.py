@@ -10,6 +10,10 @@ from typing import Any, Optional
 
 from src.market.models import PaperPosition, SignalSnapshot, WindowMarket
 
+# Diagnostic latency data is high-volume (7 assets x one minute bucket each).
+# Keep it bounded; trading history in positions/fills/signals is not pruned.
+LATENCY_RETENTION_DAYS = 30
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS windows (
   asset           TEXT NOT NULL,
@@ -73,7 +77,8 @@ CREATE TABLE IF NOT EXISTS fills (
   price       REAL,
   size        REAL,
   fee         REAL DEFAULT 0,
-  role        TEXT
+  role        TEXT,
+  mode        TEXT DEFAULT 'paper'
 );
 
 CREATE TABLE IF NOT EXISTS positions (
@@ -94,47 +99,7 @@ CREATE TABLE IF NOT EXISTS positions (
   payout          REAL DEFAULT 0,
   pnl             REAL DEFAULT 0,
   settled_ts      REAL,
-  UNIQUE(asset, start_ts)
-);
-
-CREATE TABLE IF NOT EXISTS maker_shadow (
-  id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts                REAL NOT NULL,
-  asset             TEXT NOT NULL,
-  start_ts          INTEGER NOT NULL,
-  end_ts            INTEGER NOT NULL,
-  side              TEXT NOT NULL,
-  token_id          TEXT,
-  taker_position_id INTEGER,
-  fair              REAL,
-  ask               REAL,
-  bid               REAL,
-  spread            REAL,
-  quote_price       REAL,
-  queue_ahead       REAL,
-  depth_above       REAL,
-  target_shares     REAL,
-  consumed          REAL DEFAULT 0,
-  maker_filled      REAL DEFAULT 0,
-  maker_notional    REAL DEFAULT 0,
-  first_fill_ts     REAL,
-  last_fill_ts      REAL,
-  fallback_used     INTEGER DEFAULT 0,
-  fallback_filled   REAL DEFAULT 0,
-  fallback_notional REAL DEFAULT 0,
-  fallback_fee      REAL DEFAULT 0,
-  fallback_ts       REAL,
-  taker_price       REAL,
-  taker_fee         REAL,
-  taker_shares      REAL,
-  taker_cost        REAL,
-  status            TEXT DEFAULT 'open',
-  cancel_reason     TEXT,
-  outcome           TEXT,
-  payout            REAL DEFAULT 0,
-  pnl               REAL DEFAULT 0,
-  taker_pnl         REAL DEFAULT 0,
-  settled_ts        REAL,
+  mode            TEXT DEFAULT 'paper',
   UNIQUE(asset, start_ts)
 );
 
@@ -170,64 +135,22 @@ CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts);
 CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts);
 CREATE INDEX IF NOT EXISTS idx_fills_ts ON fills(ts);
 CREATE INDEX IF NOT EXISTS idx_positions_settled ON positions(settled_ts);
-CREATE INDEX IF NOT EXISTS idx_maker_shadow_ts ON maker_shadow(ts);
-CREATE INDEX IF NOT EXISTS idx_maker_shadow_settled ON maker_shadow(settled_ts);
+-- Per-asset dashboard queries (7 assets) filter by asset and sort by time.
+CREATE INDEX IF NOT EXISTS idx_windows_asset_start ON windows(asset, start_ts DESC);
+-- recent_signals() orders by id DESC; match that ordering to avoid a temp sort
+-- (ts and id are correlated but not identical).
+CREATE INDEX IF NOT EXISTS idx_signals_asset_id ON signals(asset, id DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_asset_ts ON orders(asset, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_fills_asset_ts ON fills(asset, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_positions_asset_id ON positions(asset, id DESC);
+CREATE INDEX IF NOT EXISTS idx_positions_asset_settled ON positions(asset, settled_ts);
+-- open_positions() runs on every /api/status poll; without this index SQLite
+-- scans the whole (growing) positions table.
+CREATE INDEX IF NOT EXISTS idx_positions_status_start ON positions(status, start_ts);
+CREATE INDEX IF NOT EXISTS idx_positions_status_settled ON positions(status, settled_ts);
 CREATE INDEX IF NOT EXISTS idx_latency_buckets_ts ON latency_buckets(bucket_ts);
+CREATE INDEX IF NOT EXISTS idx_latency_buckets_asset_ts ON latency_buckets(asset, bucket_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_latency_events_ts ON latency_events(ts);
-"""
-
-# Columns the maker-shadow simulator is allowed to write. Keeping the list
-# explicit makes the dynamic UPDATE in update_maker_shadow() safe.
-_MAKER_SHADOW_FIELDS = {
-    "ts",
-    "asset",
-    "start_ts",
-    "end_ts",
-    "side",
-    "token_id",
-    "taker_position_id",
-    "fair",
-    "ask",
-    "bid",
-    "spread",
-    "quote_price",
-    "queue_ahead",
-    "depth_above",
-    "target_shares",
-    "consumed",
-    "maker_filled",
-    "maker_notional",
-    "first_fill_ts",
-    "last_fill_ts",
-    "fallback_used",
-    "fallback_filled",
-    "fallback_notional",
-    "fallback_fee",
-    "fallback_ts",
-    "taker_price",
-    "taker_fee",
-    "taker_shares",
-    "taker_cost",
-    "status",
-    "cancel_reason",
-    "outcome",
-    "payout",
-    "pnl",
-    "taker_pnl",
-    "settled_ts",
-}
-
-_MAKER_SHADOW_SELECT = """
-SELECT
-  m.*,
-  w.outcome AS window_outcome,
-  CASE WHEN m.maker_filled > 0 THEN m.maker_notional / m.maker_filled END AS maker_avg_price,
-  CASE WHEN m.first_fill_ts IS NOT NULL THEN m.first_fill_ts - m.ts END AS wait_s,
-  CASE WHEN m.fallback_filled > 0 THEN m.fallback_notional / m.fallback_filled END AS fallback_avg_price,
-  (m.maker_filled + m.fallback_filled) AS total_shares,
-  (m.maker_notional + m.fallback_notional + m.fallback_fee) AS total_cost
-FROM maker_shadow m
-LEFT JOIN windows w ON w.asset = m.asset AND w.start_ts = m.start_ts
 """
 
 
@@ -246,12 +169,38 @@ class Database:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        # /api/status polls summary() every 2s per open dashboard. The total
+        # aggregate scans all settled positions, so a 2s TTL keeps that cost
+        # constant as history grows.
+        self._summary_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         with self._lock:
             self.conn.executescript(SCHEMA)
+            # Older databases predate the paper/live mode column.
+            for table in ("positions", "fills"):
+                cols = {
+                    row[1]
+                    for row in self.conn.execute(f"PRAGMA table_info({table})")
+                }
+                if "mode" not in cols:
+                    self.conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN mode TEXT DEFAULT 'paper'"
+                    )
+            self.conn.commit()
+        self.prune_latency()
+
+    def prune_latency(self, days: int = LATENCY_RETENTION_DAYS) -> None:
+        cutoff = time.time() - float(days) * 86400.0
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM latency_buckets WHERE bucket_ts < ?", (int(cutoff),)
+            )
+            self.conn.execute(
+                "DELETE FROM latency_events WHERE ts < ?", (cutoff,)
+            )
             self.conn.commit()
 
     def close(self) -> None:
@@ -402,11 +351,12 @@ class Database:
         size: float,
         fee: float,
         role: str,
+        mode: str = "paper",
     ) -> None:
         self._exec(
             "INSERT OR REPLACE INTO fills "
-            "(id, order_id, ts, asset, start_ts, token_id, side, price, size, fee, role) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "(id, order_id, ts, asset, start_ts, token_id, side, price, size, fee, role, mode) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 fill_id,
                 order_id,
@@ -419,6 +369,7 @@ class Database:
                 size,
                 fee,
                 role,
+                mode,
             ),
         )
 
@@ -428,8 +379,8 @@ class Database:
             cur = self._exec(
                 "INSERT INTO positions "
                 "(asset, start_ts, end_ts, token_id, side, size, avg_price, cost, fees, "
-                " entry_ts, price_to_beat, status) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,'open')",
+                " entry_ts, price_to_beat, status, mode) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,'open',?)",
                 (
                     pos.asset,
                     pos.start_ts,
@@ -442,6 +393,7 @@ class Database:
                     pos.fees,
                     pos.entry_ts,
                     pos.price_to_beat,
+                    pos.mode,
                 ),
             )
             return int(cur.lastrowid or 0)
@@ -451,6 +403,8 @@ class Database:
                 (pos.asset, pos.start_ts),
             )
             return int(row["id"]) if row else 0
+        finally:
+            self._summary_cache.clear()
 
     def settle_position(
         self, position_id: int, outcome: str, payout: float, pnl: float
@@ -460,6 +414,7 @@ class Database:
             "WHERE id=?",
             (outcome, payout, pnl, time.time(), int(position_id)),
         )
+        self._summary_cache.clear()
 
     def open_positions(self) -> list[dict[str, Any]]:
         return self._query("SELECT * FROM positions WHERE status='open' ORDER BY start_ts")
@@ -492,7 +447,13 @@ class Database:
         return self._count("windows", asset)
 
     def count_signals(self, asset: str | None = None) -> int:
-        return self._count("signals", asset)
+        if asset:
+            return self._count("signals", asset)
+        # signals is insert-only (no delete path), so MAX(id) is exact and
+        # O(log n) instead of a COUNT(*) full scan on a table that grows by
+        # tens of thousands of rows per day with seven assets.
+        row = self._one("SELECT COALESCE(MAX(id),0) AS n FROM signals")
+        return int(row["n"]) if row else 0
 
     def count_orders(self, asset: str | None = None) -> int:
         return self._count("orders", asset)
@@ -581,100 +542,6 @@ class Database:
             params,
         )
 
-    # ── maker shadow ─────────────────────────────────────────────────────
-    def insert_maker_shadow(self, **fields: Any) -> int:
-        cols = [key for key in fields if key in _MAKER_SHADOW_FIELDS]
-        if not cols:
-            raise ValueError("no maker_shadow fields supplied")
-        placeholders = ",".join("?" for _ in cols)
-        cur = self._exec(
-            f"INSERT INTO maker_shadow ({','.join(cols)}) VALUES ({placeholders})",
-            tuple(fields[key] for key in cols),
-        )
-        return int(cur.lastrowid or 0)
-
-    def update_maker_shadow(self, shadow_id: int, **fields: Any) -> None:
-        cols = [key for key in fields if key in _MAKER_SHADOW_FIELDS]
-        if not cols:
-            return
-        assignments = ",".join(f"{key}=?" for key in cols)
-        self._exec(
-            f"UPDATE maker_shadow SET {assignments} WHERE id=?",
-            (*[fields[key] for key in cols], int(shadow_id)),
-        )
-
-    def settle_maker_shadow(
-        self,
-        shadow_id: int,
-        *,
-        outcome: str,
-        payout: float,
-        pnl: float,
-        taker_pnl: float,
-        settled_ts: float | None = None,
-    ) -> None:
-        self._exec(
-            "UPDATE maker_shadow SET status='settled', outcome=?, payout=?, pnl=?, "
-            "taker_pnl=?, settled_ts=? WHERE id=? AND settled_ts IS NULL",
-            (
-                outcome,
-                payout,
-                pnl,
-                taker_pnl,
-                float(settled_ts if settled_ts is not None else time.time()),
-                int(shadow_id),
-            ),
-        )
-
-    def maker_shadow_row(self, asset: str, start_ts: int) -> Optional[dict[str, Any]]:
-        return self._one(
-            _MAKER_SHADOW_SELECT + " WHERE m.asset=? AND m.start_ts=?",
-            (str(asset), int(start_ts)),
-        )
-
-    def active_maker_shadow(self, now: float) -> list[dict[str, Any]]:
-        return self._query(
-            _MAKER_SHADOW_SELECT
-            + " WHERE m.status='open' AND m.end_ts > ? ORDER BY m.id",
-            (float(now),),
-        )
-
-    def ended_unsettled_maker_shadow(self, now: float) -> list[dict[str, Any]]:
-        return self._query(
-            _MAKER_SHADOW_SELECT
-            + " WHERE m.settled_ts IS NULL AND m.end_ts <= ? ORDER BY m.id",
-            (float(now),),
-        )
-
-    def recent_maker_shadow(
-        self, limit: int = 50, offset: int = 0, days: int | None = None
-    ) -> list[dict[str, Any]]:
-        if days is None:
-            return self._query(
-                _MAKER_SHADOW_SELECT + " ORDER BY m.id DESC LIMIT ? OFFSET ?",
-                (int(limit), int(offset)),
-            )
-        since = time.time() - float(days) * 86400.0
-        return self._query(
-            _MAKER_SHADOW_SELECT
-            + " WHERE m.ts >= ? ORDER BY m.id DESC LIMIT ? OFFSET ?",
-            (since, int(limit), int(offset)),
-        )
-
-    def maker_shadow_rows(self, days: int = 14) -> list[dict[str, Any]]:
-        since = time.time() - float(days) * 86400.0
-        return self._query(
-            _MAKER_SHADOW_SELECT + " WHERE m.ts >= ? ORDER BY m.id DESC",
-            (since,),
-        )
-
-    def count_maker_shadow(self, days: int | None = None) -> int:
-        if days is None:
-            return self._count("maker_shadow")
-        since = time.time() - float(days) * 86400.0
-        row = self._one("SELECT COUNT(*) AS n FROM maker_shadow WHERE ts >= ?", (since,))
-        return int(row["n"]) if row else 0
-
     def daily_realized(
         self, date_str: str, asset: str | None = None
     ) -> dict[str, Any]:
@@ -707,11 +574,18 @@ class Database:
         return row or {"pnl": 0.0, "n": 0, "wins": 0, "losses": 0}
 
     def summary(self, asset: str | None = None) -> dict[str, Any]:
+        key = str(asset).upper() if asset else ""
+        cached = self._summary_cache.get(key)
+        now = time.time()
+        if cached is not None and now - cached[0] < 2.0:
+            return cached[1]
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        return {
+        out = {
             "today": self.daily_realized(today, asset),
             "total": self.total_realized(asset),
         }
+        self._summary_cache[key] = (now, out)
+        return out
 
     def pnl_by_day(
         self, days: int = 7, asset: str | None = None

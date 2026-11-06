@@ -135,7 +135,7 @@ function renderSummary(summary) {
 }
 
 function renderBuckets(buckets) {
-  const rows = (buckets || []).slice(0, 200);
+  const rows = (buckets || []).slice(0, 500);
   $("bucket-count").textContent = String((buckets || []).length);
   const html = rows.map((b) => `<tr>
     <td class="mono">${utcTime(b.bucket_ts)}</td>
@@ -177,6 +177,7 @@ function renderNav(feeds) {
 }
 
 async function refresh() {
+  if (document.hidden) return; // don't poll from background tabs
   try {
     const data = await getJSON("/api/latency?hours=24");
     renderCards(data.summary || {}, data.decision || {});

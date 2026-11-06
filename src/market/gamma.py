@@ -1,4 +1,4 @@
-"""Gamma REST client for 5-minute Up/Down window metadata."""
+"""Gamma REST client for Up/Down window metadata (15m by default)."""
 from __future__ import annotations
 
 import json
@@ -34,7 +34,7 @@ class GammaClient:
         self.slug_tag = str(slug_tag)
         self.window_sec = int(window_sec)
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0),
+            timeout=httpx.Timeout(5.0),
             headers={"User-Agent": "polymarket-paper/0.2"},
             transport=transport,
         )

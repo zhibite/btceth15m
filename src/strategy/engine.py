@@ -1,4 +1,4 @@
-"""5m TWAP fair-value strategy engine.
+"""15m TWAP fair-value strategy engine.
 
 Per asset and per window:
   1. Build the fair Up probability from the live Chainlink prints:
@@ -16,7 +16,6 @@ import time
 from typing import Any, Optional
 
 from src.config import AppSettings, RuntimeConfig
-from src.execution.maker_shadow import MakerShadow
 from src.execution.paper import PaperBroker
 from src.execution.router import BrokerRouter
 from src.feeds.clob_ws import ClobWsFeed
@@ -31,7 +30,9 @@ from src.strategy.risk import KillSwitch, RiskManager
 log = get_logger(__name__)
 
 _TIE_REL = 1e-5  # 0.1 bps: wait for the official Gamma finalPrice
-_NEAR_MISS_LOG_S = 10.0
+# One near-miss signal per asset every 30s is plenty for post-hoc analysis.
+# At 10s and 7 assets this table would take ~60k rows/day.
+_NEAR_MISS_LOG_S = 30.0
 
 
 class StrategyEngine:
@@ -49,11 +50,9 @@ class StrategyEngine:
         paper: PaperBroker,
         router: BrokerRouter,
         latency=None,
-        maker_shadow: Optional[MakerShadow] = None,
     ) -> None:
         self.settings = settings
         self.latency = latency
-        self.maker_shadow = maker_shadow
         self.runtime = runtime
         self.db = db
         self.kill = killswitch
@@ -71,12 +70,17 @@ class StrategyEngine:
         self._tasks: list[asyncio.Task] = []
         self._last_near_miss: dict[str, float] = {}
         self._settle_first_seen: dict[tuple[str, int], float] = {}
+        # After a failed/rejected entry, wait a few seconds before retrying the
+        # same window. Without this a live FOK order that cannot fill (or a
+        # credential/balance error) would be re-attempted every engine tick.
+        self._entry_cooldown: dict[tuple[str, int], float] = {}
+        # Settlement prefers Gamma's official finalPrice. Limit those requests
+        # so a slow/down Gamma does not get 7 requests every 2s.
+        self._official_fetch_after: dict[tuple[str, int], float] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────
     def start(self) -> None:
         self._load_open_positions()
-        if self.maker_shadow is not None:
-            self.maker_shadow.load_active()
         self._running = True
         self._tasks = [
             asyncio.create_task(self._tick_loop(), name="engine-ticks"),
@@ -115,12 +119,12 @@ class StrategyEngine:
                 fees=float(row["fees"]),
                 entry_ts=float(row["entry_ts"]),
                 price_to_beat=float(row["price_to_beat"]),
+                mode=str(row.get("mode") or "paper"),
             )
             self.positions[(pos.asset, pos.start_ts)] = pos
 
     # ── window discovery callback ────────────────────────────────────────
     async def on_window(self, asset: str, market: WindowMarket) -> None:
-        self.books.set_tokens(asset, [market.up_token, market.down_token])
         self.db.upsert_window(market)
         self.latest.setdefault(asset, {})
         self.latest[asset].update(
@@ -155,13 +159,13 @@ class StrategyEngine:
     def _tick_interval(self) -> float:
         """One loop drives every asset, so honour the fastest per-asset tick.
 
-        ``engine_tick_s`` is the only knob exposed in the per-asset config that
-        is not applied inside the per-asset branch of :meth:`tick`; taking the
-        minimum means an override on any asset actually changes the cadence.
+        ``engine_tick_s`` is a common parameter, but per-asset defaults can
+        still override it. Only enabled assets participate; otherwise a
+        disabled asset with a fast tick would keep the whole loop busy.
         """
+        assets = self.runtime.enabled_assets(self.settings.assets_list)
         values = [
-            self.runtime.params_for(asset).engine_tick_s
-            for asset in self.settings.assets_list
+            self.runtime.params_for(asset).engine_tick_s for asset in assets
         ]
         if not values:
             values = [self.runtime.params.engine_tick_s]
@@ -180,16 +184,51 @@ class StrategyEngine:
     # ── main tick ────────────────────────────────────────────────────────
     async def tick(self) -> None:
         now = time.time()
-        if self.maker_shadow is not None:
-            trades = self.books.drain_trades()
-            if trades:
-                self.maker_shadow.on_trades(trades)
-        fair_by_asset: dict[str, Optional[float]] = {}
+        cutoff = now - float(self.settings.window_sec)
+        for key in [k for k in self._entry_cooldown if k[1] < cutoff]:
+            self._entry_cooldown.pop(key, None)
         for asset in self.settings.assets_list:
             params = self.runtime.params_for(asset)
             market = self.windows.current_window(asset)
             if market is None:
-                self._publish(asset, {"status": "no_window"})
+                if not self.runtime.is_enabled(asset):
+                    self.books.set_tokens(asset, [])
+                self._publish(
+                    asset,
+                    {
+                        "status": "no_window",
+                        "enabled": self.runtime.is_enabled(asset),
+                        "mode": self.router.mode_for(asset),
+                    },
+                )
+                continue
+
+            enabled = self.runtime.is_enabled(asset)
+            # Only subscribe to books we actually need: enabled assets and
+            # assets with an open position (for the dashboard mark). Disabled
+            # flat assets stop consuming CLOB bandwidth.
+            self.books.set_tokens(
+                asset,
+                [market.up_token, market.down_token]
+                if enabled or (asset, market.start_ts) in self.positions
+                else [],
+            )
+            if not enabled:
+                # Keep the window visible on the dashboard, but never evaluate
+                # or execute entries for a disabled asset. A minimal payload
+                # avoids model_dump/candidate work for coins that are off.
+                self._publish(
+                    asset,
+                    {
+                        "asset": asset,
+                        "ts": now,
+                        "window": market.to_dict(),
+                        "time_left": market.end_ts - now,
+                        "status": "disabled",
+                        "enabled": False,
+                        "mode": self.router.mode_for(asset),
+                    },
+                )
                 continue
 
             buf = self.rtds.buffer(asset)
@@ -255,7 +294,6 @@ class StrategyEngine:
                 continue
 
             fair_up = float(fv["fair"])
-            fair_by_asset[asset] = fair_up
             candidates = self._candidates(market, fair_up, now, params)
             eligible = [c for c in candidates if c.get("eligible", True)]
             best = max(eligible, key=lambda c: c["edge"]) if eligible else None
@@ -299,11 +337,6 @@ class StrategyEngine:
                 if book is not None and book.updated_ts
                 else None
             )
-            # Snapshot the touch before the order call so the shadow quote is
-            # the book we actually decided on.
-            shadow_captured = None
-            if self.maker_shadow is not None and params.maker_shadow_enabled:
-                shadow_captured = self.maker_shadow.capture_quote(book)
             try:
                 pos = await self.router.buy(
                     market=market,
@@ -316,6 +349,7 @@ class StrategyEngine:
                 )
             except Exception as exc:  # noqa: BLE001
                 log.exception("engine.execution_failed", asset=asset, error=str(exc))
+                self._entry_cooldown[(asset, market.start_ts)] = time.time() + 10.0
                 payload["status"] = f"execution_error: {exc}"
                 self._publish(asset, payload)
                 continue
@@ -336,6 +370,7 @@ class StrategyEngine:
                 )
 
             if pos is None:
+                self._entry_cooldown[(asset, market.start_ts)] = time.time() + 3.0
                 payload["status"] = "fill_rejected"
                 self._log_signal(
                     asset,
@@ -349,17 +384,6 @@ class StrategyEngine:
                 continue
 
             self.positions[(asset, market.start_ts)] = pos
-            if self.maker_shadow is not None:
-                self.maker_shadow.open_attempt(
-                    market=market,
-                    side=side,
-                    token_id=token,
-                    taker_pos=pos,
-                    fair=float(best["fair"]),
-                    now=time.time(),
-                    params=params,
-                    captured=shadow_captured,
-                )
             self._log_signal(
                 asset,
                 market,
@@ -376,20 +400,11 @@ class StrategyEngine:
                 asset=asset,
                 window=market.start_ts,
                 side=side,
+                mode=self.router.mode_for(asset),
                 fair=round(float(best["fair"]), 3),
                 ask=round(float(best["avg_price"]), 3),
                 edge=round(float(best["edge"]), 3),
                 shares=round(pos.size, 3),
-            )
-
-        if self.maker_shadow is not None:
-            self.maker_shadow.on_tick(
-                now=time.time(),
-                fair_by_asset=fair_by_asset,
-                books=self.books.books,
-                params_by_asset={
-                    a: self.runtime.params_for(a) for a in self.settings.assets_list
-                },
             )
 
     # ── filters / selection ──────────────────────────────────────────────
@@ -404,6 +419,11 @@ class StrategyEngine:
     ) -> str:
         if position is not None:
             return "in_position"
+        cooldown_until = getattr(self, "_entry_cooldown", {}).get(
+            (market.asset, market.start_ts), 0.0
+        )
+        if now < cooldown_until:
+            return f"cooldown({cooldown_until - now:.0f}s)"
         ok, reason = self.risk.can_enter(market.asset)
         if not ok:
             return reason
@@ -502,7 +522,8 @@ class StrategyEngine:
             "time_left": market.end_ts - now,
             "position": self._position_info(market.asset, market.start_ts),
             "status": status,
-            "mode": self.router.mode,
+            "enabled": self.runtime.is_enabled(market.asset),
+            "mode": self.router.mode_for(market.asset),
             "killswitch": self.kill.to_dict(),
             "daily_pnl": self.risk.daily_pnl(market.asset),
             "params": self.runtime.params_for(market.asset).model_dump(),
@@ -594,13 +615,12 @@ class StrategyEngine:
             pnl = payout - pos.cost
             self.db.settle_position(pos.id, outcome, payout, pnl)
             self.db.set_window_final(pos.asset, pos.start_ts, final_price, outcome)
-            if self.maker_shadow is not None:
-                self.maker_shadow.settle(pos, outcome)
             log.info(
                 "engine.settled",
                 asset=pos.asset,
                 window=pos.start_ts,
                 side=pos.side,
+                mode=pos.mode,
                 outcome=outcome,
                 close=final_price,
                 p0=pos.price_to_beat,
@@ -611,6 +631,8 @@ class StrategyEngine:
             )
             self.positions.pop(key, None)
             self._settle_first_seen.pop(key, None)
+            self._entry_cooldown.pop(key, None)
+            self._official_fetch_after.pop(key, None)
 
     async def _resolve_outcome(
         self, pos: PaperPosition, now: float
@@ -621,11 +643,15 @@ class StrategyEngine:
         twap_window = float(self.settings.twap_window_s or 60)
         close = buf.twap_ending_at(pos.end_ts, twap_window) if buf is not None else None
 
-        # Prefer the official Gamma finalPrice when it is available.
-        try:
-            official = await self.windows.fetch_window(pos.asset, pos.start_ts)
-        except Exception:
-            official = None
+        # Prefer the official Gamma finalPrice when it is available, but do not
+        # hit Gamma every 2s per open position while waiting for it.
+        official = None
+        if now >= self._official_fetch_after.get(key, 0.0):
+            self._official_fetch_after[key] = now + 5.0
+            try:
+                official = await self.windows.fetch_window(pos.asset, pos.start_ts)
+            except Exception:
+                official = None
         if (
             official is not None
             and official.price_to_beat is not None

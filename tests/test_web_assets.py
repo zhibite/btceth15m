@@ -27,17 +27,31 @@ class _FakeDB:
         self.data[key] = value
 
 
-def _client(tmp_path):
+def _client(tmp_path, *, live=None, live_enabled=False):
     db = Database(tmp_path / "web.db")
     runtime = RuntimeConfig(
         _FakeDB(),
         asset_defaults={"BTC": {"min_fair": 0.65, "entry_min_rel_s": 180}},
     )
+
+    def _mode_for(asset):
+        mode = runtime.mode_for(asset)
+        if mode == "inherit":
+            return "paper"
+        if mode == "live" and not (live is not None and live.available):
+            return "paper"
+        return mode
+
     state = SimpleNamespace(
-        settings=SimpleNamespace(assets_list=["BTC", "ETH"]),
+        settings=SimpleNamespace(
+            assets_list=["BTC", "ETH"],
+            paper_trading=True,
+            live_enabled=live_enabled,
+        ),
         runtime=runtime,
         db=db,
-        router=SimpleNamespace(mode="paper"),
+        live=live,
+        router=SimpleNamespace(mode="paper", mode_for=_mode_for),
         killswitch=SimpleNamespace(to_dict=lambda: {"active": False}),
         engine=SimpleNamespace(latest={}),
         rtds=SimpleNamespace(health=lambda: {}),
@@ -149,6 +163,97 @@ def test_config_api_rejects_bad_value(tmp_path):
     )
     assert r.status_code == 400
     assert r.json()["detail"]
+
+
+def test_config_api_asset_rows_and_bulk_save(tmp_path):
+    client, runtime, _ = _client(tmp_path)
+
+    body = client.get("/api/config").json()
+    rows = {row["asset"]: row for row in body["asset_rows"]}
+    assert set(rows) == {"BTC", "ETH"}
+    assert rows["BTC"]["enabled"] is True
+    assert rows["BTC"]["mode"] == "inherit"
+    assert rows["BTC"]["source"] == "asset_default"
+    assert "min_edge" in body["key_fields"]
+    assert body["global_mode"] == "paper"
+    assert body["live"]["available"] is False
+
+    saved = client.put(
+        "/api/config/bulk",
+        json={
+            "global_params": {"max_spread": 0.02},
+            "assets": [
+                {
+                    "asset": "BTC",
+                    "enabled": False,
+                    "mode": "paper",
+                    "params": {"min_edge": 0.11},
+                },
+                {"asset": "ETH", "mode": "inherit", "params": {}},
+            ],
+        },
+    )
+    assert saved.status_code == 200
+    saved_body = saved.json()
+    saved_rows = {row["asset"]: row for row in saved_body["asset_rows"]}
+
+    assert saved_rows["BTC"]["enabled"] is False
+    assert saved_rows["BTC"]["mode"] == "paper"
+    assert saved_rows["BTC"]["params"]["min_edge"] == 0.11
+    assert saved_rows["BTC"]["source"] == "override"
+    assert saved_rows["ETH"]["params"]["min_edge"] == runtime.params.min_edge
+    assert saved_body["global_params"]["max_spread"] == 0.02
+
+    status = client.get("/api/status").json()
+    assert status["enabled_assets"] == ["ETH"]
+    assert status["asset_states"]["BTC"]["enabled"] is False
+    assert status["asset_states"]["BTC"]["effective_mode"] == "paper"
+
+
+def test_bulk_config_rejects_live_when_unavailable(tmp_path):
+    client, _, _ = _client(tmp_path)
+    r = client.put(
+        "/api/config/bulk",
+        json={"assets": [{"asset": "BTC", "mode": "live"}]},
+    )
+    assert r.status_code == 400
+    assert "实盘不可用" in r.json()["detail"]
+
+
+def test_bulk_config_can_select_live_when_available(tmp_path):
+    live = SimpleNamespace(available=True, unavailable_reason="")
+    client, runtime, _ = _client(tmp_path, live=live, live_enabled=True)
+
+    r = client.put(
+        "/api/config/bulk",
+        json={"assets": [{"asset": "BTC", "mode": "live"}]},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    btc = next(row for row in body["asset_rows"] if row["asset"] == "BTC")
+    assert btc["mode"] == "live"
+    assert btc["effective_mode"] == "live"
+    assert runtime.mode_for("BTC") == "live"
+
+
+def test_bulk_config_rejects_common_param_in_asset_row(tmp_path):
+    client, _, _ = _client(tmp_path)
+    r = client.put(
+        "/api/config/bulk",
+        json={"assets": [{"asset": "BTC", "params": {"engine_tick_s": 1.0}}]},
+    )
+    assert r.status_code == 400
+    assert "关键参数" in r.json()["detail"]
+
+
+def test_bulk_config_rejects_unknown_asset(tmp_path):
+    client, _, _ = _client(tmp_path)
+    r = client.put(
+        "/api/config/bulk",
+        json={"assets": [{"asset": "HYPE", "enabled": True}]},
+    )
+    assert r.status_code == 400
+    assert "未配置" in r.json()["detail"]
 
 
 def test_pnl_api_filters_by_asset(tmp_path):

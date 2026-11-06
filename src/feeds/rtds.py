@@ -26,7 +26,15 @@ from src.infra.logging import get_logger
 
 log = get_logger(__name__)
 
-SYMBOLS = {"BTC": "btc/usd", "ETH": "eth/usd"}
+SYMBOLS = {
+    "BTC": "btc/usd",
+    "ETH": "eth/usd",
+    "BNB": "bnb/usd",
+    "SOL": "sol/usd",
+    "XRP": "xrp/usd",
+    "DOGE": "doge/usd",
+    "HYPE": "hype/usd",
+}
 
 
 class PriceBuffer:
