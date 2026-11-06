@@ -311,13 +311,41 @@ dialog.modal[open] { animation: modal-in .18s ease-out; }
 }
 
 /* ── TWAP additions ────────────────────────────────────────────────── */
-.asset-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 18px; margin-bottom: 24px; }
+/* One full-width row per asset: the card is laid out horizontally so adding
+   more coins costs vertical space only. */
+.asset-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 24px; }
 .asset-grid .price-card { margin-bottom: 0; }
+.asset-card { padding: 14px 18px 16px; }
+.asset-head { display: flex; align-items: center; gap: 16px 24px; flex-wrap: wrap; padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid #1e1e3a; }
+.asset-head-main { flex: 1 1 320px; min-width: 0; }
+.asset-head-main .price-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.asset-slug { display: inline-block; max-width: min(460px, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.asset-head-status { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #6b7280; }
+.asset-kv b { margin-left: 5px; color: #e0e0e0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.asset-head-clock { margin-left: auto; text-align: right; line-height: 1.2; }
+.asset-head-clock .muted { font-size: 10px; }
 .asset-clock { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .asset-clock small { display: block; font-size: 10px; color: #6b7280; font-weight: 500; }
-.status-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 12px; font-size: 12px; color: #6b7280; }
-.sub-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid #1e1e3a; }
-.sub-section h2 { font-size: 13px; font-weight: 600; color: #9ca3af; margin-bottom: 8px; }
+.asset-body { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 18px; align-items: start; }
+.asset-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.asset-side .price-bar-label { margin-bottom: 0; }
+.asset-side .tokens { margin-top: 2px; gap: 8px; }
+.asset-side .token-item { padding: 8px 10px; }
+.asset-side .token-label { margin-bottom: 2px; }
+.asset-side .token-price { font-size: 20px; line-height: 1.2; }
+.asset-side .token-item .muted { font-size: 11px; margin-top: 2px; }
+.gate-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 16px; margin-top: 2px; font-size: 12px; }
+.gate-grid > div { display: flex; justify-content: space-between; gap: 10px; color: #6b7280; white-space: nowrap; }
+.gate-grid b { color: #e0e0e0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.asset-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.asset-block-title { font-size: 12px; font-weight: 600; color: #9ca3af; letter-spacing: .03em; margin-bottom: 6px; }
+.asset-card table { font-size: 12px; }
+.asset-card th { padding: 5px 8px; }
+.asset-card td { padding: 6px 8px; }
+.asset-card .no-data { padding: 8px 0; text-align: left; }
+.asset-card .fair-detail { margin-top: 4px; }
+.pos-line { display: flex; flex-wrap: wrap; gap: 4px 20px; font-size: 12px; color: #9ca3af; }
+.pos-line b { color: #e0e0e0; font-weight: 600; font-variant-numeric: tabular-nums; }
 .candidate-best td { background: rgba(124, 58, 237, 0.09); }
 .fair-detail { font-size: 11px; color: #6b7280; margin-top: 4px; }
 .price-title .muted { font-size: 12px; font-weight: 400; }
@@ -330,9 +358,15 @@ dialog.modal[open] { animation: modal-in .18s ease-out; }
 .config-unit { font-size: 11px; color: #6b7280; margin-left: 4px; }
 .login-note { font-size: 12px; color: #6b7280; text-align: center; margin-top: 14px; line-height: 1.5; }
 .login-note a { color: #a78bfa; }
+@media (max-width: 1000px) {
+  .asset-body { grid-template-columns: 1fr; }
+}
 @media (max-width: 900px) {
   .asset-grid { grid-template-columns: 1fr; }
   .asset-clock { font-size: 18px; }
+  .asset-head { gap: 10px 16px; }
+  .asset-head-clock { margin-left: 0; text-align: left; }
+  .asset-head-status { width: 100%; }
 }
 
 /* Config field input + unit on one line without overflowing the card. */
@@ -351,8 +385,8 @@ dialog.modal[open] { animation: modal-in .18s ease-out; }
   border: 1px solid #1e1e3a;
   border-radius: 10px;
 }
-.config-table { width: 100%; min-width: 1068px; table-layout: fixed; }
-.config-table col.c-asset { width: 126px; }
+.config-table { width: 100%; min-width: 1038px; table-layout: fixed; }
+.config-table col.c-asset { width: 96px; }
 .config-table col.c-enabled { width: 54px; }
 .config-table col.c-mode { width: 120px; }
 .config-table col.c-param { width: 88px; }
@@ -467,5 +501,5 @@ dialog.modal[open] { animation: modal-in .18s ease-out; }
 
 @media (max-width: 760px) {
   .config-page { padding: 14px; }
-  .config-table { min-width: 1068px; }
+  .config-table { min-width: 1038px; }
 }

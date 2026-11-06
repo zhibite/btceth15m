@@ -253,7 +253,7 @@ function assetCard(asset, data) {
   if (data && (data.enabled === false || data.status === "disabled")) {
     const w = data.window;
     const timeLeft = w ? Number(w.end_ts) - Date.now() / 1000 : null;
-    return `<div class="price-card disabled-card">
+    return `<div class="price-card asset-card disabled-card">
       <div class="price-head">
         <div class="price-title">${esc(asset)} ${modePill(data.mode)}</div>
         <span class="badge disabled">已停用</span>
@@ -265,7 +265,7 @@ function assetCard(asset, data) {
     </div>`;
   }
   if (!data || !data.window) {
-    return `<div class="price-card">
+    return `<div class="price-card asset-card">
       <div class="price-head">
         <div class="price-title">${esc(asset)}</div>
         <span class="badge ${statusClass(data && data.status)}">${esc(statusLabel(data && data.status))}</span>
@@ -318,7 +318,7 @@ function assetCard(asset, data) {
     : '<tr><td colspan="9" class="no-data">等待盘口…</td></tr>';
 
   const posHtml = position
-    ? `<div class="gate-row" style="margin-top:0;padding-top:0;border-top:none">
+    ? `<div class="pos-line">
         <span>持仓 <b>${esc(position.side)}</b></span>
         <span>份额 <b>${fmt(position.size, 2)}</b></span>
         <span>均价 <b>${fmt(position.avg_price, 3)}</b></span>
@@ -328,50 +328,56 @@ function assetCard(asset, data) {
       </div>`
     : '<div class="no-data">本窗口未持仓</div>';
 
-  return `<div class="price-card">
-    <div class="price-head">
-      <div>
-        <div class="price-title">${esc(asset)} ${modePill(data.mode)} <span class="muted">${esc(w.slug || "")}</span></div>
+  return `<div class="price-card asset-card">
+    <div class="asset-head">
+      <div class="asset-head-main">
+        <div class="price-title">${esc(asset)} ${modePill(data.mode)} <span class="muted asset-slug" title="${esc(w.slug || "")}">${esc(w.slug || "")}</span></div>
         <div class="muted" style="font-size:11px;margin-top:2px">开盘基准来源：${esc(p0SourceLabel(w.p0_source || data.p0_source))}</div>
       </div>
-      <div class="text-right">
+      <div class="asset-head-status">
+        <span class="badge ${statusClass(data.status)}">${esc(statusLabel(data.status))}</span>
+        <span class="asset-kv">今日盈亏<b class="${pnlClass(data.daily_pnl)}">${money(data.daily_pnl)}</b></span>
+        ${threshold !== null ? `<span class="asset-kv">入场阈值<b class="mono">${fmt(threshold, 3)}</b></span>` : ""}
+      </div>
+      <div class="asset-head-clock">
         <div class="asset-clock">${timeStr(timeLeft)}</div>
-        <div class="muted" style="font-size:10px">剩余 · rel ${fmt(data.rel, 0)}s</div>
+        <div class="muted">剩余 · rel ${fmt(data.rel, 0)}s</div>
       </div>
     </div>
-    <div class="status-line">
-      <span class="badge ${statusClass(data.status)}">${esc(statusLabel(data.status))}</span>
-      <span>今日盈亏 <span class="${pnlClass(data.daily_pnl)}">${money(data.daily_pnl)}</span></span>
-      ${threshold !== null ? `<span>入场阈值 <b class="mono">${fmt(threshold, 3)}</b></span>` : ""}
-    </div>
-    <div class="price-bar-label"><span>UP <b>${fmt(fairUp, 3)}</b></span><span>DOWN <b>${fmt(fairDown, 3)}</b></span></div>
-    <div class="price-bar"><div class="bar-up" style="width:${fairPct}%"></div><div class="bar-down" style="width:${100 - fairPct}%"></div></div>
-    <div class="tokens">
-      ${tokenItem("up", "UP", fairUp, up)}
-      ${tokenItem("down", "DOWN", fairDown, down)}
-    </div>
-    <div class="gate-row">
-      <span>开盘基准 <b>${fmt(p0, 2)}</b></span>
-      <span>Chainlink 现价 <b>${fmt(data.spot, 2)}</b></span>
-      <span>60s TWAP <b>${fmt(data.twap60, 2)}</b></span>
-      <span>σ/秒 <b>${fmt(data.sigma_bps, 2)}</b> bps</span>
-      <span>剩余 <b>${timeStr(timeLeft)}</b></span>
-      ${minFair > 0 ? `<span>最小 Fair <b class="mono">${fmt(minFair, 2)}</b></span>` : ""}
-      ${minEntryPrice > 0 ? `<span>最小入场价 <b class="mono">${fmt(minEntryPrice, 2)}</b></span>` : ""}
-    </div>
-    <div class="sub-section">
-      <h2>盘口与候选</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>方向</th><th>公允</th><th>买一</th><th>卖一</th><th>价差</th><th>成交均价</th><th>Edge</th><th>可买份额</th><th>盘口年龄</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+    <div class="asset-body">
+      <div class="asset-side">
+        <div class="price-bar-label"><span>UP <b>${fmt(fairUp, 3)}</b></span><span>DOWN <b>${fmt(fairDown, 3)}</b></span></div>
+        <div class="price-bar"><div class="bar-up" style="width:${fairPct}%"></div><div class="bar-down" style="width:${100 - fairPct}%"></div></div>
+        <div class="tokens">
+          ${tokenItem("up", "UP", fairUp, up)}
+          ${tokenItem("down", "DOWN", fairDown, down)}
+        </div>
+        <div class="gate-grid">
+          <div><span>开盘基准</span><b class="mono">${fmt(p0, 2)}</b></div>
+          <div><span>Chainlink 现价</span><b class="mono">${fmt(data.spot, 2)}</b></div>
+          <div><span>60s TWAP</span><b class="mono">${fmt(data.twap60, 2)}</b></div>
+          <div><span>σ/秒</span><b class="mono">${fmt(data.sigma_bps, 2)} bps</b></div>
+          <div><span>剩余</span><b class="mono">${timeStr(timeLeft)}</b></div>
+          ${minFair > 0 ? `<div><span>最小 Fair</span><b class="mono">${fmt(minFair, 2)}</b></div>` : ""}
+          ${minEntryPrice > 0 ? `<div><span>最小入场价</span><b class="mono">${fmt(minEntryPrice, 2)}</b></div>` : ""}
+        </div>
       </div>
-      ${fairDetail(data.fair_detail)}
-    </div>
-    <div class="sub-section">
-      <h2>当前持仓</h2>
-      ${posHtml}
+      <div class="asset-main">
+        <div class="asset-block">
+          <div class="asset-block-title">盘口与候选</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>方向</th><th>公允</th><th>买一</th><th>卖一</th><th>价差</th><th>成交均价</th><th>Edge</th><th>可买份额</th><th>盘口年龄</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          ${fairDetail(data.fair_detail)}
+        </div>
+        <div class="asset-block">
+          <div class="asset-block-title">当前持仓</div>
+          ${posHtml}
+        </div>
+      </div>
     </div>
   </div>`;
 }
