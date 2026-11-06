@@ -1,4 +1,4 @@
-from src.market.models import PaperPosition, WindowMarket
+from src.market.models import PaperPosition, SignalSnapshot, WindowMarket
 from src.persistence.db import Database
 
 
@@ -52,4 +52,32 @@ def test_settings_roundtrip(tmp_path):
     assert db.get_setting("x") is None
     db.set_setting("x", "1")
     assert db.get_setting("x") == "1"
+    db.close()
+
+
+def test_signal_pagination(tmp_path):
+    db = Database(tmp_path / "pagination.db")
+    for i in range(25):
+        db.insert_signal(
+            SignalSnapshot(
+                ts=float(i),
+                asset="BTC",
+                start_ts=1000 + i,
+                side="UP",
+                fair=0.5,
+                ask=0.5,
+                edge=0.1,
+                fee=0.01,
+                shares=5.0,
+                reason="test",
+                acted=False,
+            )
+        )
+    assert db.count_signals() == 25
+    page1 = db.recent_signals(10, 0)
+    page3 = db.recent_signals(10, 20)
+    assert len(page1) == 10
+    assert len(page3) == 5
+    assert int(page1[0]["start_ts"]) == 1024  # newest first
+    assert int(page3[-1]["start_ts"]) == 1000  # oldest last
     db.close()

@@ -84,6 +84,18 @@ def _clean(value: Any) -> Any:
     return value
 
 
+def _paginated(rows: Any, limit: int, offset: int, total: int) -> dict:
+    return {
+        "data": _clean(rows),
+        "pagination": {
+            "limit": int(limit),
+            "offset": int(offset),
+            "total": int(total),
+            "has_more": int(offset) + int(limit) < int(total),
+        },
+    }
+
+
 def _safe_next(value: str | None) -> str:
     if value and value.startswith("/") and not value.startswith("//"):
         return value
@@ -236,37 +248,54 @@ async def api_status(_: None = Depends(require_read)) -> dict:
 
 @app.get("/api/windows")
 async def api_windows(
-    limit: int = Query(50, ge=1, le=500), _: None = Depends(require_read)
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _: None = Depends(require_read),
 ) -> dict:
-    return {"data": _clean(_get_state().db.recent_windows(limit))}
+    db = _get_state().db
+    return _paginated(db.recent_windows(limit, offset), limit, offset, db.count_windows())
 
 
 @app.get("/api/signals")
 async def api_signals(
-    limit: int = Query(100, ge=1, le=1000), _: None = Depends(require_read)
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _: None = Depends(require_read),
 ) -> dict:
-    return {"data": _clean(_get_state().db.recent_signals(limit))}
+    db = _get_state().db
+    return _paginated(db.recent_signals(limit, offset), limit, offset, db.count_signals())
 
 
 @app.get("/api/orders")
 async def api_orders(
-    limit: int = Query(100, ge=1, le=1000), _: None = Depends(require_read)
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _: None = Depends(require_read),
 ) -> dict:
-    return {"data": _clean(_get_state().db.recent_orders(limit))}
+    db = _get_state().db
+    return _paginated(db.recent_orders(limit, offset), limit, offset, db.count_orders())
 
 
 @app.get("/api/fills")
 async def api_fills(
-    limit: int = Query(100, ge=1, le=1000), _: None = Depends(require_read)
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _: None = Depends(require_read),
 ) -> dict:
-    return {"data": _clean(_get_state().db.recent_fills(limit))}
+    db = _get_state().db
+    return _paginated(db.recent_fills(limit, offset), limit, offset, db.count_fills())
 
 
 @app.get("/api/positions")
 async def api_positions(
-    limit: int = Query(100, ge=1, le=1000), _: None = Depends(require_read)
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _: None = Depends(require_read),
 ) -> dict:
-    return {"data": _clean(_get_state().db.recent_positions(limit))}
+    db = _get_state().db
+    return _paginated(
+        db.recent_positions(limit, offset), limit, offset, db.count_positions()
+    )
 
 
 @app.get("/api/pnl")

@@ -1,6 +1,12 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+const PAGERS = {
+  windows: { limit: 20, offset: 0, total: 0 },
+  positions: { limit: 20, offset: 0, total: 0 },
+  fills: { limit: 20, offset: 0, total: 0 },
+  signals: { limit: 20, offset: 0, total: 0 },
+};
 
 const fmt = (n, d = 3) => {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "--";
@@ -73,7 +79,6 @@ function renderStats(summary) {
 }
 
 function renderWindows(rows) {
-  $("window-count").textContent = String(rows.length);
   const html = rows.map((r) => `<tr>
     <td class="mono">${utcTime(r.start_ts)}</td>
     <td>${esc(r.asset)}</td>
@@ -86,7 +91,6 @@ function renderWindows(rows) {
 }
 
 function renderPositions(rows) {
-  $("position-count").textContent = String(rows.length);
   const html = rows.map((p) => {
     const pnl = p.status === "settled"
       ? `<span class="${pnlClass(p.pnl)}">${money(p.pnl)}</span>`
@@ -108,7 +112,6 @@ function renderPositions(rows) {
 }
 
 function renderFills(rows) {
-  $("fill-count").textContent = String(rows.length);
   const html = rows.map((f) => `<tr>
     <td class="mono">${utcTime(f.ts)}</td>
     <td>${esc(f.asset)}</td>
@@ -122,7 +125,6 @@ function renderFills(rows) {
 }
 
 function renderSignals(rows) {
-  $("signal-count").textContent = String(rows.length);
   const html = rows.map((s) => `<tr>
     <td class="mono">${utcTime(s.ts)}</td>
     <td>${esc(s.asset)}</td>
@@ -146,21 +148,61 @@ function renderNav(status) {
   $("live-label").textContent = ok ? "在线" : "离线";
 }
 
+function updatePager(prefix, state) {
+  const page = Math.floor(state.offset / state.limit) + 1;
+  const pages = Math.max(1, Math.ceil(state.total / state.limit));
+  const info = $(prefix + "-page-info");
+  if (info) info.textContent = `第 ${page} / ${pages} 页 · 共 ${state.total} 条`;
+  const prev = $(prefix + "-prev");
+  const next = $(prefix + "-next");
+  if (prev) prev.disabled = state.offset <= 0;
+  if (next) next.disabled = state.offset + state.limit >= state.total;
+}
+
+async function loadWindows() {
+  const state = PAGERS.windows;
+  const res = await getJSON(`/api/windows?limit=${state.limit}&offset=${state.offset}`);
+  renderWindows(res.data || []);
+  state.total = Number(res.pagination?.total || 0);
+  $("window-count").textContent = String(state.total);
+  updatePager("windows", state);
+}
+
+async function loadPositions() {
+  const state = PAGERS.positions;
+  const res = await getJSON(`/api/positions?limit=${state.limit}&offset=${state.offset}`);
+  renderPositions(res.data || []);
+  state.total = Number(res.pagination?.total || 0);
+  $("position-count").textContent = String(state.total);
+  updatePager("positions", state);
+}
+
+async function loadFills() {
+  const state = PAGERS.fills;
+  const res = await getJSON(`/api/fills?limit=${state.limit}&offset=${state.offset}`);
+  renderFills(res.data || []);
+  state.total = Number(res.pagination?.total || 0);
+  $("fill-count").textContent = String(state.total);
+  updatePager("fills", state);
+}
+
+async function loadSignals() {
+  const state = PAGERS.signals;
+  const res = await getJSON(`/api/signals?limit=${state.limit}&offset=${state.offset}`);
+  renderSignals(res.data || []);
+  state.total = Number(res.pagination?.total || 0);
+  $("signal-count").textContent = String(state.total);
+  updatePager("signals", state);
+}
+
 async function refresh() {
   try {
-    const [status, pnl, windows, positions, fills, signals] = await Promise.all([
+    const [status, pnl] = await Promise.all([
       getJSON("/api/status"),
       getJSON("/api/pnl?days=7"),
-      getJSON("/api/windows?limit=50"),
-      getJSON("/api/positions?limit=100"),
-      getJSON("/api/fills?limit=100"),
-      getJSON("/api/signals?limit=100"),
     ]);
     renderStats(pnl.summary || {});
-    renderWindows(windows.data || []);
-    renderPositions(positions.data || []);
-    renderFills(fills.data || []);
-    renderSignals(signals.data || []);
+    await Promise.all([loadWindows(), loadPositions(), loadFills(), loadSignals()]);
     renderNav(status);
   } catch (e) {
     if (String(e.message) === "auth") return;
@@ -169,6 +211,22 @@ async function refresh() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  const loaders = {
+    windows: loadWindows,
+    positions: loadPositions,
+    fills: loadFills,
+    signals: loadSignals,
+  };
+  Object.keys(loaders).forEach((prefix) => {
+    $(prefix + "-prev").addEventListener("click", () => {
+      PAGERS[prefix].offset = Math.max(0, PAGERS[prefix].offset - PAGERS[prefix].limit);
+      loaders[prefix]().catch(() => {});
+    });
+    $(prefix + "-next").addEventListener("click", () => {
+      PAGERS[prefix].offset += PAGERS[prefix].limit;
+      loaders[prefix]().catch(() => {});
+    });
+  });
   $("clock").textContent = clockStr();
   setInterval(() => { $("clock").textContent = clockStr(); }, 1000);
   refresh();

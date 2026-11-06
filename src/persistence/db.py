@@ -343,30 +343,64 @@ class Database:
     def open_positions(self) -> list[dict[str, Any]]:
         return self._query("SELECT * FROM positions WHERE status='open' ORDER BY start_ts")
 
-    def recent_positions(self, limit: int = 50) -> list[dict[str, Any]]:
+    def recent_positions(
+        self, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
         return self._query(
-            "SELECT * FROM positions ORDER BY id DESC LIMIT ?", (int(limit),)
+            "SELECT * FROM positions ORDER BY id DESC LIMIT ? OFFSET ?",
+            (int(limit), int(offset)),
         )
 
     # ── queries for the dashboard ────────────────────────────────────────
-    def recent_windows(self, limit: int = 50) -> list[dict[str, Any]]:
+    def _count(self, table: str) -> int:
+        row = self._one(f"SELECT COUNT(*) AS n FROM {table}")
+        return int(row["n"]) if row else 0
+
+    def count_windows(self) -> int:
+        return self._count("windows")
+
+    def count_signals(self) -> int:
+        return self._count("signals")
+
+    def count_orders(self) -> int:
+        return self._count("orders")
+
+    def count_fills(self) -> int:
+        return self._count("fills")
+
+    def count_positions(self) -> int:
+        return self._count("positions")
+
+    def recent_windows(
+        self, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
         return self._query(
-            "SELECT * FROM windows ORDER BY start_ts DESC LIMIT ?", (int(limit),)
+            "SELECT * FROM windows ORDER BY start_ts DESC LIMIT ? OFFSET ?",
+            (int(limit), int(offset)),
         )
 
-    def recent_signals(self, limit: int = 100) -> list[dict[str, Any]]:
+    def recent_signals(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
         return self._query(
-            "SELECT * FROM signals ORDER BY id DESC LIMIT ?", (int(limit),)
+            "SELECT * FROM signals ORDER BY id DESC LIMIT ? OFFSET ?",
+            (int(limit), int(offset)),
         )
 
-    def recent_orders(self, limit: int = 100) -> list[dict[str, Any]]:
+    def recent_orders(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
         return self._query(
-            "SELECT * FROM orders ORDER BY ts DESC LIMIT ?", (int(limit),)
+            "SELECT * FROM orders ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?",
+            (int(limit), int(offset)),
         )
 
-    def recent_fills(self, limit: int = 100) -> list[dict[str, Any]]:
+    def recent_fills(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
         return self._query(
-            "SELECT * FROM fills ORDER BY ts DESC LIMIT ?", (int(limit),)
+            "SELECT * FROM fills ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?",
+            (int(limit), int(offset)),
         )
 
     def daily_realized(self, date_str: str) -> dict[str, Any]:

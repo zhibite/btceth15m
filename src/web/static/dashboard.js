@@ -2,6 +2,10 @@
 
 const $ = (id) => document.getElementById(id);
 const ASSETS = ["BTC", "ETH"];
+const PAGERS = {
+  fills: { limit: 20, offset: 0, total: 0 },
+  signals: { limit: 20, offset: 0, total: 0 },
+};
 
 const fmt = (n, d = 3) => {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "--";
@@ -340,6 +344,34 @@ function renderSignals(signals) {
   $("signals-tbody").innerHTML = rows || '<tr><td colspan="8" class="no-data">暂无信号</td></tr>';
 }
 
+/* ── Pagination ───────────────────────────────────────────────────────── */
+function updatePager(prefix, state) {
+  const page = Math.floor(state.offset / state.limit) + 1;
+  const pages = Math.max(1, Math.ceil(state.total / state.limit));
+  const info = $(prefix + "-page-info");
+  if (info) info.textContent = `第 ${page} / ${pages} 页 · 共 ${state.total} 条`;
+  const prev = $(prefix + "-prev");
+  const next = $(prefix + "-next");
+  if (prev) prev.disabled = state.offset <= 0;
+  if (next) next.disabled = state.offset + state.limit >= state.total;
+}
+
+async function loadFills() {
+  const state = PAGERS.fills;
+  const res = await getJSON(`/api/fills?limit=${state.limit}&offset=${state.offset}`);
+  renderFills(res.data || []);
+  state.total = Number(res.pagination?.total || 0);
+  updatePager("fills", state);
+}
+
+async function loadSignals() {
+  const state = PAGERS.signals;
+  const res = await getJSON(`/api/signals?limit=${state.limit}&offset=${state.offset}`);
+  renderSignals(res.data || []);
+  state.total = Number(res.pagination?.total || 0);
+  updatePager("signals", state);
+}
+
 /* ── Refresh loop ─────────────────────────────────────────────────────── */
 let lastTables = 0;
 
@@ -351,12 +383,7 @@ async function refresh() {
     renderPositions(status.positions || []);
     if (Date.now() - lastTables > 5000) {
       lastTables = Date.now();
-      const [fills, signals] = await Promise.all([
-        getJSON("/api/fills?limit=20"),
-        getJSON("/api/signals?limit=20"),
-      ]);
-      renderFills(fills.data || []);
-      renderSignals(signals.data || []);
+      await Promise.all([loadFills(), loadSignals()]);
     }
   } catch (e) {
     if (String(e.message) === "auth") return;
@@ -398,6 +425,22 @@ async function startStrategy() {
 document.addEventListener("DOMContentLoaded", () => {
   $("stop-btn").addEventListener("click", stopStrategy);
   $("start-btn").addEventListener("click", startStrategy);
+  $("fills-prev").addEventListener("click", () => {
+    PAGERS.fills.offset = Math.max(0, PAGERS.fills.offset - PAGERS.fills.limit);
+    loadFills().catch(() => {});
+  });
+  $("fills-next").addEventListener("click", () => {
+    PAGERS.fills.offset += PAGERS.fills.limit;
+    loadFills().catch(() => {});
+  });
+  $("signals-prev").addEventListener("click", () => {
+    PAGERS.signals.offset = Math.max(0, PAGERS.signals.offset - PAGERS.signals.limit);
+    loadSignals().catch(() => {});
+  });
+  $("signals-next").addEventListener("click", () => {
+    PAGERS.signals.offset += PAGERS.signals.limit;
+    loadSignals().catch(() => {});
+  });
   $("clock").textContent = clockStr();
   setInterval(() => { $("clock").textContent = clockStr(); }, 1000);
   refresh();
