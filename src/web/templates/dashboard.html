@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>控制台 - BTCETH5M</title>
+<title>控制台 - __MARKET_LABEL__</title>
 <link rel="stylesheet" href="/static/style.css?v=__ASSET_VERSION__">
 </head>
 <body>
 <nav>
-  <span class="brand">BTCETH5M</span>
+  <span class="brand">__MARKET_LABEL__</span>
   <a href="/" class="active">控制台</a>
   <a href="/trades">交易记录</a>
   <a href="/maker">Maker 对照</a>
@@ -27,7 +27,7 @@
     <div class="control-status">
       <span class="control-dot running" id="control-dot"></span>
       <span class="control-label" id="control-label">策略运行中</span>
-      <span class="control-meta" id="control-meta">纸盘 · 自动扫描 BTC/ETH 5m 窗口</span>
+      <span class="control-meta" id="control-meta">纸盘 · 自动扫描 BTC/ETH __INTERVAL_LABEL__ 窗口</span>
     </div>
     <div class="control-actions">
       <button class="btn btn-danger" id="stop-btn" type="button">紧急停止</button>
@@ -54,7 +54,7 @@
     <div class="stat-card">
       <div class="stat-label">当前窗口剩余</div>
       <div class="stat-value orange" id="window-remain">--</div>
-      <div class="stat-sub">BTC / ETH 5m 窗口</div>
+      <div class="stat-sub">BTC / ETH __INTERVAL_LABEL__ 窗口</div>
     </div>
   </div>
 
@@ -107,7 +107,7 @@
   </div>
 </div>
 
-<footer>BTCETH5M · 纸盘模拟 · 数据每 2 秒刷新 · 时间均为 UTC</footer>
+<footer>__MARKET_LABEL__ · 纸盘模拟 · 数据每 2 秒刷新 · 时间均为 UTC</footer>
 
 <dialog class="modal" id="confirm-dialog">
   <form method="dialog">

@@ -74,6 +74,9 @@ class WindowManager:
                         # on the next tick without blocking the other assets.
                         continue
                     self.current[asset] = market
+                    # Do not let a late refresh from the previous window
+                    # throttle the first priceToBeat fetch of this one.
+                    self._last_refresh.pop(asset, None)
                     log.info(
                         "window.discovered",
                         asset=asset,
@@ -90,14 +93,19 @@ class WindowManager:
                             )
                     continue
 
-                # Late metadata: priceToBeat / finalPrice may be null for a
-                # few seconds after the boundary.
-                missing = cur.price_to_beat is None or cur.final_price is None
-                if missing and now - self._last_refresh.get(asset, 0.0) >= 2.0:
+                # Late metadata: priceToBeat may be null for a few seconds
+                # after the boundary while Gamma catches up. finalPrice only
+                # exists once the window has ended and the engine records it
+                # during settlement, so polling for the whole window would
+                # burn a Gamma request every 2s for nothing.
+                if (
+                    cur.price_to_beat is None
+                    and now - self._last_refresh.get(asset, 0.0) >= 2.0
+                ):
                     self._last_refresh[asset] = now
                     fresh = await self.gamma.get_window(asset, start)
                     if fresh is not None:
-                        if cur.price_to_beat is None and fresh.price_to_beat is not None:
+                        if fresh.price_to_beat is not None:
                             cur.price_to_beat = fresh.price_to_beat
                             cur.p0_source = "gamma"
                             log.info(

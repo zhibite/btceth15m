@@ -1,7 +1,9 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const ASSETS = ["BTC", "ETH"];
+const DEFAULT_ASSETS = ["BTC", "ETH"];
+// Updated from /api/status so the UI follows MARKET_INTERVAL.
+let MARKET_INTERVAL = "15m";
 const PAGERS = {
   fills: { limit: 20, offset: 0, total: 0 },
   signals: { limit: 20, offset: 0, total: 0 },
@@ -175,7 +177,7 @@ function renderSummary(status) {
   $("control-label").textContent = active ? "策略已停止" : "策略运行中";
   $("control-meta").textContent = active
     ? (status.killswitch?.reason || "手动停止")
-    : "纸盘 · 自动扫描 BTC/ETH 5m 窗口";
+    : "纸盘 · 自动扫描 BTC/ETH " + MARKET_INTERVAL + " 窗口";
   $("stop-btn").hidden = active;
   $("start-btn").hidden = !active;
 
@@ -212,7 +214,7 @@ function assetCard(asset, data) {
         <div class="price-title">${esc(asset)}</div>
         <span class="badge ${statusClass(data && data.status)}">${esc(statusLabel(data && data.status))}</span>
       </div>
-      <div class="no-data">等待 Gamma 发现 5 分钟窗口…</div>
+      <div class="no-data">等待 Gamma 发现 ${MARKET_INTERVAL} 窗口…</div>
     </div>`;
   }
 
@@ -318,9 +320,14 @@ function assetCard(asset, data) {
   </div>`;
 }
 
-function renderAssets(assets) {
+function renderAssets(assets, configured) {
   const el = $("asset-grid");
-  el.innerHTML = ASSETS.map((asset) => assetCard(asset, assets ? assets[asset] : null)).join("");
+  // Prefer the assets the backend is actually running; a hardcoded list would
+  // silently hide any asset added via ASSETS in .env / config.toml.
+  const list = Array.isArray(configured) && configured.length
+    ? configured
+    : DEFAULT_ASSETS;
+  el.innerHTML = list.map((asset) => assetCard(asset, assets ? assets[asset] : null)).join("");
 }
 
 /* ── Tables ───────────────────────────────────────────────────────────── */
@@ -419,8 +426,9 @@ let lastTables = 0;
 async function refresh() {
   try {
     const status = await getJSON("/api/status");
+    if (status.market_interval) MARKET_INTERVAL = String(status.market_interval);
     renderSummary(status);
-    renderAssets(status.assets || {});
+    renderAssets(status.assets || {}, status.configured_assets);
     renderPositions(status.positions || []);
     if (Date.now() - lastTables > 5000) {
       lastTables = Date.now();

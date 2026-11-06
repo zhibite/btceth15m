@@ -62,15 +62,22 @@ def test_unknown_asset_uses_global():
     assert not runtime.has_override("SOL")
 
 
-def test_shipped_btc_defaults_are_loaded_from_toml():
+def test_shipped_asset_defaults_are_loaded_from_toml():
     """config.toml table names are upper-case; the loader must still find them."""
-    btc = get_asset_strategy_defaults().get("BTC", {})
-    assert btc["entry_min_rel_s"] == 180
-    assert btc["entry_max_rel_s"] == 270
+    defaults = get_asset_strategy_defaults()
+    btc = defaults.get("BTC", {})
+    assert btc["entry_min_rel_s"] == 630
+    assert btc["entry_max_rel_s"] == 810
     assert btc["model_buffer"] == 0.05
     assert btc["min_fair"] == 0.65
     assert btc["min_entry_price"] == 0.55
-    assert "ETH" not in get_asset_strategy_defaults()
+
+    eth = defaults.get("ETH", {})
+    assert eth["entry_min_rel_s"] == 630
+    assert eth["entry_max_rel_s"] == 870
+    assert eth["model_buffer"] == 0.05
+    assert eth["min_fair"] == 0.65
+    assert eth["min_entry_price"] == 0.55
 
 
 def test_asset_defaults_merge_over_global_and_reset():

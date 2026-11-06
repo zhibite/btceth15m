@@ -10,17 +10,40 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
 _TOML_PATH = ROOT / "config.toml"
+
+_INTERVAL_RE = re.compile(r"^(\d+)([smhd])$")
+_INTERVAL_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def interval_seconds(value: str) -> int:
+    """Parse a market interval such as ``"5m"`` or ``"15m"`` into seconds."""
+    text = str(value).strip().lower()
+    match = _INTERVAL_RE.fullmatch(text)
+    if match is None:
+        raise ValueError(
+            f"invalid market interval {value!r}; expected a value like '5m' or '15m'"
+        )
+    return int(match.group(1)) * _INTERVAL_UNITS[match.group(2)]
+
+
+def interval_label(seconds: int) -> str:
+    """Inverse of :func:`interval_seconds` for intervals that divide a day."""
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60), ("s", 1)):
+        if seconds % size == 0:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
 
 
 @lru_cache(maxsize=1)
@@ -67,7 +90,10 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(str(ROOT / ".env"),), extra="ignore")
 
     assets: str = "BTC,ETH"
-    window_sec: int = 300
+    # Market cadence: the slug tag is ``updown-{market_interval}`` and the
+    # window duration must agree with it.
+    market_interval: str = "15m"
+    window_sec: int = 900
     twap_window_s: int = 60
 
     rtds_url: str = "wss://ws-live-data.polymarket.com"
@@ -79,7 +105,7 @@ class AppSettings(BaseSettings):
     reconnect_max_s: float = 30.0
 
     web_host: str = "127.0.0.1"
-    web_port: int = 8036
+    web_port: int = 8037
     web_username: str = "admin"
     web_password: str = ""
     web_session_ttl_s: int = 7 * 24 * 3600
@@ -99,6 +125,22 @@ class AppSettings(BaseSettings):
     wallet_address: str = ""
     funder_address: str = ""
     signature_type: int = 0
+
+    @model_validator(mode="after")
+    def _check_market_interval(self) -> "AppSettings":
+        seconds = interval_seconds(self.market_interval)
+        if seconds != self.window_sec:
+            raise ValueError(
+                f"MARKET_INTERVAL={self.market_interval!r} implies {seconds}s "
+                f"but WINDOW_SEC={self.window_sec}"
+            )
+        if self.window_sec <= 0 or 86400 % self.window_sec:
+            raise ValueError("WINDOW_SEC must divide 86400 so windows align to UTC day")
+        return self
+
+    @property
+    def slug_tag(self) -> str:
+        return f"updown-{self.market_interval.strip().lower()}"
 
     @property
     def assets_list(self) -> list[str]:
@@ -132,8 +174,8 @@ class StrategyParams(BaseModel):
     min_entry_price: float = Field(0.0, ge=0.0, le=1.0)
     max_position_usd: float = Field(5.0, gt=0.0, le=100000.0)
     daily_loss_limit_usd: float = Field(20.0, gt=0.0)
-    entry_min_rel_s: int = Field(60, ge=0, le=299)
-    entry_max_rel_s: int = Field(285, ge=1, le=300)
+    entry_min_rel_s: int = Field(540, ge=0, le=899)
+    entry_max_rel_s: int = Field(870, ge=1, le=900)
     max_spread: float = Field(0.03, ge=0.0, le=1.0)
     max_stale_book_s: float = Field(3.0, ge=0.1, le=60.0)
     min_ask_shares: float = Field(5.0, ge=0.0)
@@ -149,7 +191,7 @@ class StrategyParams(BaseModel):
     # the counterfactual for comparison.
     maker_shadow_enabled: bool = True
     maker_buffer: float = Field(0.01, ge=0.0, le=0.5)
-    maker_fallback_rel_s: int = Field(250, ge=0, le=300)
+    maker_fallback_rel_s: int = Field(840, ge=0, le=900)
     maker_chase_bid: bool = True
 
 
@@ -160,9 +202,17 @@ def _toml_settings() -> dict[str, Any]:
         _section("WEB"),
         _section("EXECUTION"),
     )
+    raw_interval = g.get("MARKET_INTERVAL")
+    raw_window = g.get("WINDOW_SEC")
+    if raw_interval is None:
+        # Backwards compatibility for a config that only sets WINDOW_SEC.
+        raw_interval = interval_label(int(raw_window)) if raw_window else "15m"
+    if raw_window is None:
+        raw_window = interval_seconds(str(raw_interval))
     return {
         "assets": g.get("ASSETS", "BTC,ETH"),
-        "window_sec": g.get("WINDOW_SEC", 300),
+        "market_interval": str(raw_interval),
+        "window_sec": raw_window,
         "twap_window_s": g.get("TWAP_WINDOW_S", 60),
         "rtds_url": f.get("RTDS_URL", "wss://ws-live-data.polymarket.com"),
         "clob_ws_url": f.get(
@@ -175,7 +225,7 @@ def _toml_settings() -> dict[str, Any]:
         "reconnect_base_s": f.get("RECONNECT_BASE_S", 1.0),
         "reconnect_max_s": f.get("RECONNECT_MAX_S", 30.0),
         "web_host": w.get("HOST", "127.0.0.1"),
-        "web_port": w.get("PORT", 8036),
+        "web_port": w.get("PORT", 8037),
         "web_username": w.get("USERNAME", "admin"),
         "web_password": w.get("PASSWORD", ""),
         "web_session_ttl_s": w.get("SESSION_TTL_S", 7 * 24 * 3600),
@@ -193,6 +243,10 @@ def get_settings() -> AppSettings:
         env_name = field.upper()
         if env_name in env:
             data[field] = env[env_name]
+    if "WINDOW_SEC" in env and "MARKET_INTERVAL" not in env:
+        # A deployment that only overrides WINDOW_SEC still gets a matching
+        # slug tag instead of a validation error.
+        data["market_interval"] = interval_label(int(data["window_sec"]))
     return AppSettings(**data)
 
 

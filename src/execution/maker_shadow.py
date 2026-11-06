@@ -77,6 +77,10 @@ class ShadowAttempt:
     taker_shares: float
     taker_cost: float
     consumed: float = 0.0
+    # Shares already filled at *this* quote. ``consumed`` resets on requote,
+    # so subtracting cumulative ``maker_filled`` here would silently require
+    # the new level to re-consume every previously filled share.
+    filled_at_quote: float = 0.0
     maker_filled: float = 0.0
     maker_notional: float = 0.0
     first_fill_ts: Optional[float] = None
@@ -329,12 +333,13 @@ class MakerShadow:
                     continue
                 attempt.consumed += size
                 available = attempt.consumed - attempt.quote.queue_ahead
-                new_fill = available - attempt.maker_filled
+                new_fill = available - attempt.filled_at_quote
                 remaining = attempt.quote.target_shares - attempt.maker_filled
                 if new_fill <= _EPS or remaining <= _EPS:
                     continue
                 fill = min(remaining, new_fill)
                 attempt.maker_filled += fill
+                attempt.filled_at_quote += fill
                 attempt.maker_notional += fill * attempt.quote.quote_price
                 if attempt.first_fill_ts is None:
                     attempt.first_fill_ts = ts
@@ -424,6 +429,7 @@ class MakerShadow:
             sum(size for price, size in book.bids.items() if price > new_bid)
         )
         attempt.consumed = 0.0
+        attempt.filled_at_quote = 0.0
         self._persist(attempt)
         log.info(
             "maker_shadow.requote",
@@ -623,6 +629,10 @@ class MakerShadow:
                 taker_shares=_num(row.get("taker_shares")),
                 taker_cost=_num(row.get("taker_cost")),
                 consumed=_num(row.get("consumed")),
+                # filled_at_quote is not persisted. On resume assume every
+                # fill belongs to the current quote, which is conservative
+                # if a requote happened before the restart.
+                filled_at_quote=_num(row.get("maker_filled")),
                 maker_filled=_num(row.get("maker_filled")),
                 maker_notional=_num(row.get("maker_notional")),
                 first_fill_ts=row.get("first_fill_ts"),

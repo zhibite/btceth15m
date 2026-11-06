@@ -54,8 +54,8 @@ def _market() -> WindowMarket:
     return WindowMarket(
         asset="BTC",
         start_ts=1000,
-        end_ts=1300,
-        slug="btc-updown-5m-1000",
+        end_ts=1900,
+        slug="btc-updown-15m-1000",
         condition_id="0xabc",
         up_token="up",
         down_token="down",
@@ -64,7 +64,13 @@ def _market() -> WindowMarket:
 
 
 def _params() -> StrategyParams:
-    return StrategyParams(min_fair=0.65, min_entry_price=0.55)
+    # The gate tests are independent of the entry-timing window.
+    return StrategyParams(
+        min_fair=0.65,
+        min_entry_price=0.55,
+        entry_min_rel_s=0,
+        entry_max_rel_s=900,
+    )
 
 
 def test_gate_reason():

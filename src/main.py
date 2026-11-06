@@ -108,7 +108,11 @@ async def main() -> None:
     runtime = RuntimeConfig(db, get_strategy_defaults())
     kill = KillSwitch(db)
     risk = RiskManager(db, runtime, kill)
-    gamma = GammaClient(settings.gamma_api)
+    gamma = GammaClient(
+        settings.gamma_api,
+        slug_tag=settings.slug_tag,
+        window_sec=settings.window_sec,
+    )
     windows = WindowManager(
         gamma,
         settings.assets_list,

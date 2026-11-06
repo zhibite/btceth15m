@@ -1,10 +1,14 @@
 ###############################################################################
-# Polymarket 5m BTC/ETH TWAP paper bot
+# Polymarket BTC/ETH Up/Down TWAP paper bot (default: 15m markets)
 ###############################################################################
 
 [GENERAL]
 ASSETS = "BTC,ETH"
-WINDOW_SEC = 300
+# Market cadence. Controls both the Gamma slug (``{asset}-updown-15m-{ts}``)
+# and the window duration; WINDOW_SEC must match.
+MARKET_INTERVAL = "15m"
+WINDOW_SEC = 900
+# 15m markets settle on the Chainlink 60s TWAP at the window boundary.
 TWAP_WINDOW_S = 60
 
 [FEED]
@@ -20,7 +24,7 @@ RECONNECT_MAX_S = 30.0
 # 127.0.0.1 is safe by default. To expose the dashboard set HOST="0.0.0.0"
 # and a non-empty PASSWORD (HTTP Basic auth).
 HOST = "127.0.0.1"
-PORT = 8036
+PORT = 8037
 USERNAME = "admin"
 PASSWORD = ""
 SESSION_TTL_S = 604800
@@ -40,8 +44,9 @@ MIN_FAIR = 0.0
 MIN_ENTRY_PRICE = 0.0
 MAX_POSITION_USD = 5.0
 DAILY_LOSS_LIMIT_USD = 20.0
-ENTRY_MIN_REL_S = 60
-ENTRY_MAX_REL_S = 285
+# Global fallback. BTC/ETH have explicit 15m overrides below.
+ENTRY_MIN_REL_S = 540
+ENTRY_MAX_REL_S = 870
 MAX_SPREAD = 0.03
 MAX_STALE_BOOK_S = 3.0
 MIN_ASK_SHARES = 5.0
@@ -56,23 +61,28 @@ SIGNAL_LOG_MIN_EDGE = 0.02
 # fill. It only writes comparison stats; it never changes paper execution.
 MAKER_SHADOW_ENABLED = true
 MAKER_BUFFER = 0.01
-MAKER_FALLBACK_REL_S = 250
+# Leave the last 60s (the settlement TWAP window) for the fallback taker.
+MAKER_FALLBACK_REL_S = 840
 MAKER_CHASE_BID = true
 
 # ── Per-asset defaults ──────────────────────────────────────────────────
 # Partial overrides merged over [STRATEGY]. Fields not listed inherit the
 # current global value; the dashboard can still save a per-asset override on
 # top of these (stored in SQLite).
+# 15m defaults from the 7-day backtest (2026-10-30 → 2026-11-06, 662 windows
+# per asset, Binance proxy + last-trade prices + 1/2/3¢ slippage).
+# Both gated configs stayed positive in out-of-sample walk-forward at all
+# three slippage levels; this is still a small sample, so keep paper size.
 [STRATEGY.BTC]
-# Paper results (Berlin 29 + Dublin 14 settled positions, 2026-11-06):
-# all live entries were at rel 60-120s, while the backtest's edge lives at
-# 180-270s; fair≈0.5 tickets lost most; BTC's model was overconfident
-# (22 trades, 45% wins vs 0.71 average fair).
-ENTRY_MIN_REL_S = 180
-ENTRY_MAX_REL_S = 270
-# General recommendation is 0.04; BTC gets one extra notch.
+ENTRY_MIN_REL_S = 630
+ENTRY_MAX_REL_S = 810
 MODEL_BUFFER = 0.05
-# Skip lottery tickets: fair 0.55-0.65 won only 46%, and entries below 0.50
-# won 10%. Both are independently tunable from the config page.
+MIN_FAIR = 0.65
+MIN_ENTRY_PRICE = 0.55
+
+[STRATEGY.ETH]
+ENTRY_MIN_REL_S = 630
+ENTRY_MAX_REL_S = 870
+MODEL_BUFFER = 0.05
 MIN_FAIR = 0.65
 MIN_ENTRY_PRICE = 0.55

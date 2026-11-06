@@ -221,6 +221,30 @@ def test_chase_bid_requotes_upward(tmp_path):
     db.close()
 
 
+def test_requote_does_not_recount_prior_fills(tmp_path):
+    db = Database(tmp_path / "shadow.db")
+    shadow = MakerShadow(db)
+    _open(db, shadow, params=_params(maker_chase_bid=True))
+
+    # Queue 100 -> 4 shares fill, 6 remain.
+    shadow.on_trades([_trade(0.49, 104.0)])
+
+    # Best bid moves up: requote at 0.50 with a fresh queue of 50.
+    new_book = _book(bids={0.50: 50.0, 0.49: 100.0}, asks={0.51: 100.0})
+    shadow.on_tick(
+        now=1010.0,
+        fair_by_asset={"BTC": 0.70},
+        books={"up": new_book},
+        params=_params(maker_chase_bid=True),
+    )
+
+    # 50 clears the new queue; the next 4 must fill at the new quote.
+    shadow.on_trades([_trade(0.50, 54.0)])
+    row = db.maker_shadow_row("BTC", 1000)
+    assert abs(float(row["maker_filled"]) - 8.0) < 1e-9
+    db.close()
+
+
 def test_resume_active_attempt_after_restart(tmp_path):
     db = Database(tmp_path / "shadow.db")
     shadow = MakerShadow(db)

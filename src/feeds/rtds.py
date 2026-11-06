@@ -86,7 +86,10 @@ class PriceBuffer:
             if dt <= 0 or dt > 3.0:
                 continue
             if p0 > 0 and p1 > 0:
-                returns.append(math.log(p1 / p0))
+                # ``sigma`` is per-second log-return vol. RTDS occasionally
+                # skips a second, and a raw multi-second return would inflate
+                # the estimate; Brownian variance scales linearly with time.
+                returns.append(math.log(p1 / p0) / math.sqrt(dt))
         if len(returns) < 30:
             return None
         value = float(np.std(np.asarray(returns, dtype=float), ddof=1))

@@ -618,7 +618,8 @@ class StrategyEngine:
         key = (pos.asset, pos.start_ts)
         first = self._settle_first_seen.setdefault(key, now)
         buf = self.rtds.buffer(pos.asset)
-        close = buf.twap_ending_at(pos.end_ts, 60) if buf is not None else None
+        twap_window = float(self.settings.twap_window_s or 60)
+        close = buf.twap_ending_at(pos.end_ts, twap_window) if buf is not None else None
 
         # Prefer the official Gamma finalPrice when it is available.
         try:

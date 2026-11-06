@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
-from src.config import StrategyParams
+from src.config import StrategyParams, get_settings
 from src.execution.maker_shadow import summarize_shadow
 from src.infra.logging import get_logger
 from src.web import auth
@@ -34,7 +34,7 @@ WEB_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = WEB_DIR / "templates"
 STATIC_DIR = WEB_DIR / "static"
 
-app = FastAPI(title="BTCETH5M", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="BTC/ETH Paper Bot", docs_url=None, redoc_url=None, openapi_url=None)
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -79,7 +79,14 @@ def _render(name: str) -> HTMLResponse:
     path = TEMPLATES_DIR / name
     if not path.exists():
         return HTMLResponse(f"<h1>{name} not found</h1>", status_code=500)
-    html = path.read_text(encoding="utf-8").replace("__ASSET_VERSION__", ASSET_VERSION)
+    settings = get_settings()
+    interval = settings.market_interval.lower()
+    html = (
+        path.read_text(encoding="utf-8")
+        .replace("__ASSET_VERSION__", ASSET_VERSION)
+        .replace("__MARKET_LABEL__", f"BTCETH{interval.upper()}")
+        .replace("__INTERVAL_LABEL__", interval)
+    )
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
@@ -262,6 +269,8 @@ async def api_status(_: None = Depends(require_read)) -> dict:
             "summary": state.db.summary(),
             "assets": state.engine.latest,
             "configured_assets": state.settings.assets_list,
+            "market_interval": getattr(state.settings, "market_interval", "15m"),
+            "window_sec": getattr(state.settings, "window_sec", 900),
             "positions": state.db.open_positions(),
             "feeds": {
                 "rtds": state.rtds.health(),

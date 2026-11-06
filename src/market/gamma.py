@@ -22,20 +22,33 @@ def _f(value) -> Optional[float]:
 
 
 class GammaClient:
-    def __init__(self, base_url: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        slug_tag: str = "updown-15m",
+        window_sec: int = 900,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
+        self.slug_tag = str(slug_tag)
+        self.window_sec = int(window_sec)
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(10.0),
-            headers={"User-Agent": "polymarket-5m-paper/0.1"},
+            headers={"User-Agent": "polymarket-paper/0.2"},
+            transport=transport,
         )
 
     async def close(self) -> None:
         await self._client.aclose()
 
+    def slug_for(self, asset: str, start_ts: int) -> str:
+        return f"{asset.lower()}-{self.slug_tag}-{int(start_ts)}"
+
     async def get_window(self, asset: str, start_ts: int) -> Optional[WindowMarket]:
         asset = asset.upper()
         start_ts = int(start_ts)
-        slug = f"{asset.lower()}-updown-5m-{start_ts}"
+        slug = self.slug_for(asset, start_ts)
         try:
             resp = await self._client.get(f"{self.base_url}/events", params={"slug": slug})
             resp.raise_for_status()
@@ -80,7 +93,7 @@ class GammaClient:
         return WindowMarket(
             asset=asset,
             start_ts=start_ts,
-            end_ts=start_ts + 300,
+            end_ts=start_ts + self.window_sec,
             slug=slug,
             condition_id=str(m.get("conditionId") or ""),
             up_token=str(tokens[0]),

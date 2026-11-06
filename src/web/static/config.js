@@ -27,7 +27,7 @@ const GROUPS = [
       { key: "max_spread", label: "最大价差", help: "买一/卖一价差超过该值不入场。", step: 0.005 },
       { key: "max_stale_book_s", label: "盘口最大年龄", help: "盘口超过该秒数未更新不入场。", step: 0.5, unit: "秒" },
       { key: "min_ask_shares", label: "最小卖一深度", help: "卖一档至少这么多份额。", step: 1, unit: "份" },
-      { key: "min_order_shares", label: "最小订单份额", help: "Polymarket 5m 市场最小订单通常为 5 份。", step: 1, unit: "份" },
+      { key: "min_order_shares", label: "最小订单份额", help: "Polymarket 短周期加密市场最小订单通常为 5 份。", step: 1, unit: "份" },
     ],
   },
   {
