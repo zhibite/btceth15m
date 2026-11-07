@@ -131,6 +131,9 @@ CREATE TABLE IF NOT EXISTS latency_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_windows_start ON windows(start_ts);
+-- The engine settles every ended window, traded or not; this index keeps that
+-- periodic scan to the small tail of still-open rows.
+CREATE INDEX IF NOT EXISTS idx_windows_status_end ON windows(status, end_ts);
 CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts);
 CREATE INDEX IF NOT EXISTS idx_orders_ts ON orders(ts);
 CREATE INDEX IF NOT EXISTS idx_fills_ts ON fills(ts);
@@ -274,12 +277,51 @@ class Database:
         )
 
     def set_window_final(
-        self, asset: str, start_ts: int, final_price: Optional[float], outcome: str
+        self,
+        asset: str,
+        start_ts: int,
+        final_price: Optional[float],
+        outcome: str,
+        price_to_beat: Optional[float] = None,
     ) -> None:
+        if price_to_beat is None:
+            self._exec(
+                "UPDATE windows SET final_price=?, outcome=?, status='settled', "
+                "settled_at=? WHERE asset=? AND start_ts=?",
+                (final_price, outcome, _iso_now(), asset, int(start_ts)),
+            )
+            return
+        # Gamma also refreshes priceToBeat after the window ends (it can differ
+        # from the value seen at discovery). Persist the official pair so the
+        # recorded outcome is internally consistent with the displayed p0.
         self._exec(
-            "UPDATE windows SET final_price=?, outcome=?, status='settled', settled_at=? "
+            "UPDATE windows SET price_to_beat=?, p0_source='gamma', final_price=?, "
+            "outcome=?, status='settled', settled_at=? "
             "WHERE asset=? AND start_ts=?",
-            (final_price, outcome, _iso_now(), asset, int(start_ts)),
+            (
+                float(price_to_beat),
+                final_price,
+                outcome,
+                _iso_now(),
+                asset,
+                int(start_ts),
+            ),
+        )
+
+    def unsettled_windows(
+        self, since_end_ts: float, until_end_ts: float, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Ended windows that still have no recorded result.
+
+        The strategy only settles windows it traded in; without this scan a
+        window with no entry stays ``status='open'`` forever and the dashboard
+        keeps showing it as running.
+        """
+        return self._query(
+            "SELECT asset, start_ts, end_ts, price_to_beat FROM windows "
+            "WHERE status='open' AND end_ts>=? AND end_ts<=? "
+            "ORDER BY end_ts DESC LIMIT ?",
+            (float(since_end_ts), float(until_end_ts), int(limit)),
         )
 
     # ── signals / orders / fills ─────────────────────────────────────────

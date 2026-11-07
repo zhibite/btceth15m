@@ -34,6 +34,20 @@ _TIE_REL = 1e-5  # 0.1 bps: wait for the official Gamma finalPrice
 # At 10s and 7 assets this table would take ~60k rows/day.
 _NEAR_MISS_LOG_S = 30.0
 
+# Every ended window is recorded, whether or not the bot traded it. Gamma
+# usually publishes finalPrice within seconds; the later retries cover slow
+# periods (same cadence as the recorder's official labels). Only after the
+# wait below does the local TWAP act as a fallback.
+_WINDOW_SETTLE_GRACE_S = 1.0
+_WINDOW_SETTLE_TWAP_WAIT_S = 20.0
+_WINDOW_SETTLE_RETRY_S = (5.0, 20.0, 60.0, 180.0, 600.0)
+_WINDOW_SETTLE_GIVE_UP_S = 900.0
+# After a restart, backfill recent windows the process missed. Beyond the
+# retention of the local price buffer the official result is the only source.
+_WINDOW_SETTLE_LOOKBACK_S = 24 * 3600.0
+_WINDOW_SETTLE_BATCH = 12
+_WINDOW_SETTLE_INTERVAL_S = 5.0
+
 
 class StrategyEngine:
     def __init__(
@@ -77,6 +91,10 @@ class StrategyEngine:
         # Settlement prefers Gamma's official finalPrice. Limit those requests
         # so a slow/down Gamma does not get 7 requests every 2s.
         self._official_fetch_after: dict[tuple[str, int], float] = {}
+        # Per-window retry state for settle_windows(). Windows are settled even
+        # without a position, so this state is separate from self.positions.
+        self._window_settle_next: dict[tuple[str, int], float] = {}
+        self._window_settle_attempts: dict[tuple[str, int], int] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -85,6 +103,7 @@ class StrategyEngine:
         self._tasks = [
             asyncio.create_task(self._tick_loop(), name="engine-ticks"),
             asyncio.create_task(self._settle_loop(), name="engine-settle"),
+            asyncio.create_task(self._window_settle_loop(), name="engine-windows"),
         ]
         log.info(
             "engine.started",
@@ -180,6 +199,16 @@ class StrategyEngine:
             except Exception as exc:  # noqa: BLE001
                 log.exception("engine.settle_failed", error=str(exc))
             await asyncio.sleep(2.0)
+
+    async def _window_settle_loop(self) -> None:
+        while self._running:
+            try:
+                await self.settle_windows()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.exception("engine.window_settle_failed", error=str(exc))
+            await asyncio.sleep(_WINDOW_SETTLE_INTERVAL_S)
 
     # ── main tick ────────────────────────────────────────────────────────
     async def tick(self) -> None:
@@ -634,14 +663,155 @@ class StrategyEngine:
             self._entry_cooldown.pop(key, None)
             self._official_fetch_after.pop(key, None)
 
+    async def settle_windows(self) -> None:
+        """Record the result of every ended window, traded or not.
+
+        ``settle_due`` only walks open positions, so a window the bot never
+        traded would keep ``status='open'`` forever and the dashboard would
+        show it as still running. This pass resolves those windows from
+        Gamma's official result, falling back to the local 60s TWAP, with a
+        bounded retry schedule.
+        """
+        now = time.time()
+        lookback_cutoff = now - _WINDOW_SETTLE_LOOKBACK_S
+        for key in [k for k in self._window_settle_next if k[1] < lookback_cutoff]:
+            self._window_settle_next.pop(key, None)
+            self._window_settle_attempts.pop(key, None)
+
+        rows = self.db.unsettled_windows(
+            lookback_cutoff, now - _WINDOW_SETTLE_GRACE_S
+        )
+        due: list[dict[str, Any]] = []
+        for row in rows:
+            key = (str(row["asset"]), int(row["start_ts"]))
+            # An open position owns its window: settle_due() writes the result
+            # (next to the PnL), so do not race it here.
+            if key in self.positions:
+                continue
+            if now < self._window_settle_next.get(key, 0.0):
+                continue
+            due.append(row)
+            if len(due) >= _WINDOW_SETTLE_BATCH:
+                break
+        if not due:
+            return
+
+        results = await asyncio.gather(
+            *(
+                self.windows.fetch_window(str(row["asset"]), int(row["start_ts"]))
+                for row in due
+            ),
+            return_exceptions=True,
+        )
+        for row, result in zip(due, results):
+            asset = str(row["asset"])
+            start_ts = int(row["start_ts"])
+            key = (asset, start_ts)
+            end_ts = float(row["end_ts"])
+            market = None if isinstance(result, BaseException) else result
+
+            if (
+                market is not None
+                and market.price_to_beat is not None
+                and market.final_price is not None
+            ):
+                p0 = float(market.price_to_beat)
+                self._record_window_result(
+                    asset,
+                    start_ts,
+                    float(market.final_price),
+                    p0,
+                    "gamma",
+                    store_p0=p0,
+                )
+                self._window_settle_next.pop(key, None)
+                self._window_settle_attempts.pop(key, None)
+                continue
+
+            # Gamma can lag the boundary or miss an event. Give it a short
+            # grace, then fall back to the local Chainlink prints — the same
+            # 60s TWAP the strategy settles positions on. Gamma may still have
+            # supplied priceToBeat even when finalPrice is not published yet.
+            official_p0 = (
+                float(market.price_to_beat)
+                if market is not None and market.price_to_beat is not None
+                else None
+            )
+            row_p0 = row.get("price_to_beat")
+            p0 = official_p0 if official_p0 is not None else row_p0
+            close = (
+                self._rtds_close(asset, end_ts)
+                if now - end_ts >= _WINDOW_SETTLE_TWAP_WAIT_S
+                else None
+            )
+            if close is not None and p0 is not None:
+                self._record_window_result(
+                    asset,
+                    start_ts,
+                    close,
+                    float(p0),
+                    "rtds",
+                    store_p0=official_p0,
+                )
+                self._window_settle_next.pop(key, None)
+                self._window_settle_attempts.pop(key, None)
+                continue
+
+            attempts = self._window_settle_attempts.get(key, 0) + 1
+            self._window_settle_attempts[key] = attempts
+            delay = _WINDOW_SETTLE_RETRY_S[
+                min(attempts - 1, len(_WINDOW_SETTLE_RETRY_S) - 1)
+            ]
+            if now - end_ts + delay >= _WINDOW_SETTLE_GIVE_UP_S:
+                # Neither source can resolve this window (e.g. the process
+                # was down through it and Gamma never lists it). Leave it
+                # open rather than retrying forever. This also limits the
+                # startup backfill to one request per old window.
+                self._window_settle_next[key] = float("inf")
+                self._window_settle_attempts.pop(key, None)
+                log.warning(
+                    "engine.window_settle_gave_up", asset=asset, window=start_ts
+                )
+                continue
+            self._window_settle_next[key] = now + delay
+
+    def _record_window_result(
+        self,
+        asset: str,
+        start_ts: int,
+        close: float,
+        p0: float,
+        source: str,
+        store_p0: Optional[float],
+    ) -> None:
+        outcome = "UP" if close >= p0 else "DOWN"
+        self.db.set_window_final(
+            asset, start_ts, close, outcome, price_to_beat=store_p0
+        )
+        log.info(
+            "engine.window_settled",
+            asset=asset,
+            window=start_ts,
+            outcome=outcome,
+            close=close,
+            p0=p0,
+            source=source,
+        )
+
+    def _rtds_close(self, asset: str, end_ts: float) -> Optional[float]:
+        buf = self.rtds.buffer(asset)
+        if buf is None:
+            return None
+        return buf.twap_ending_at(
+            end_ts, float(self.settings.twap_window_s or 60)
+        )
+
     async def _resolve_outcome(
         self, pos: PaperPosition, now: float
     ) -> tuple[Optional[str], Optional[float]]:
         key = (pos.asset, pos.start_ts)
         first = self._settle_first_seen.setdefault(key, now)
-        buf = self.rtds.buffer(pos.asset)
-        twap_window = float(self.settings.twap_window_s or 60)
-        close = buf.twap_ending_at(pos.end_ts, twap_window) if buf is not None else None
+        close = self._rtds_close(pos.asset, pos.end_ts)
 
         # Prefer the official Gamma finalPrice when it is available, but do not
         # hit Gamma every 2s per open position while waiting for it.

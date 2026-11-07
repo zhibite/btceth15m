@@ -117,14 +117,25 @@ function renderStats(summary) {
 }
 
 function renderWindows(rows) {
-  const html = rows.map((r) => `<tr>
+  const now = Date.now() / 1000;
+  const html = rows.map((r) => {
+    // status only flips to "settled" once the engine has the result. A window
+    // past its end_ts is waiting for that write, not still running.
+    const ended = Number.isFinite(Number(r.end_ts)) && now >= Number(r.end_ts);
+    const state = r.status === "settled"
+      ? "已结算"
+      : ended
+        ? '<span class="muted">待结算</span>'
+        : "进行中";
+    return `<tr>
     <td class="mono">${utcTime(r.start_ts)}</td>
     <td>${esc(r.asset)}</td>
     <td class="mono">${fmt(r.price_to_beat, 2)}</td>
     <td class="mono">${fmt(r.final_price, 2)}</td>
     <td>${outcomePill(r.outcome)}</td>
-    <td>${r.status === "settled" ? "已结算" : "进行中"}</td>
-  </tr>`).join("");
+    <td>${state}</td>
+  </tr>`;
+  }).join("");
   $("windows-tbody").innerHTML = html || '<tr><td colspan="6" class="no-data">暂无窗口</td></tr>';
 }
 
